@@ -2,6 +2,7 @@ import os
 import asyncio
 
 import aiosqlite
+import dateparser
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -33,8 +34,7 @@ class Client(commands.Bot):
             # sync commands after the bot is ready
             guild = GUILD_ID
             synced = await self.tree.sync(guild=guild)
-            print(f'I synced {len(synced)} commands to guild {guild.id}')
-            
+            print(f'I synced {len(synced)} commands to guild {guild.id}.')
             # start background task after bot is ready
             self.check_reminders.start()
         except Exception as e:
@@ -70,10 +70,18 @@ class Client(commands.Bot):
             for reminder in self.reminders[:]:  # copy of the list to modify safely
                 if reminder["time"] <= now:
                     # send the reminder
-                    channel = self.get_channel(reminder["channel"])
-                    if channel:
-                        mention_str = f"<@&{reminder['mention']}>" if reminder["mention"] else ""
-                        await channel.send(f"{mention_str} **Reminder:** {reminder['message']}")
+                    try:
+                        if reminder["channel"]:  # send to a specified channel
+                            channel = self.get_channel(reminder["channel"])
+                            if channel:
+                                mention_str = f"<@&{reminder['mention']}>" if reminder["mention"] else ""
+                                await channel.send(f"{mention_str} **Reminder:** {reminder['message']}")
+                        else:  # send as a DM
+                            user = await self.fetch_user(reminder["user_id"])
+                            if user:
+                                await user.send(f"**Reminder:** {reminder['message']}")
+                    except Exception as e:
+                        print(f"Failed to send reminder: {e}")
 
                     # handle repeating reminders
                     if reminder["interval"] == "daily":
@@ -89,7 +97,10 @@ class Client(commands.Bot):
                         continue  # skip updating if it's a one-time reminder
 
                     # update the reminder time in the database for recurring reminders
-                    await db.execute("UPDATE reminders SET time = ? WHERE id = ?", (reminder["time"].isoformat(), reminder["id"]))
+                    await db.execute(
+                        "UPDATE reminders SET time = ? WHERE id = ?",
+                        (reminder["time"].isoformat(), reminder["id"])
+                    )
                     await db.commit()
 
     async def on_message(self, message):
@@ -106,30 +117,38 @@ async def seyHello(interaction: discord.Interaction):
 @bot.tree.command(name="remind", description="Create a new reminder", guild=GUILD_ID)
 @app_commands.describe(
     title="Title of the reminder",
-    time="Time for the reminder (e.g., 10:30pm)",
+    time="Time for the reminder (e.g., Monday at 8am)",
     interval="Repeat interval (e.g., daily, weekly)",
     channel="Channel to send the reminder in",
     mention="Role to mention",
     message="Custom message for the reminder"
 )
 async def create_reminder(interaction: discord.Interaction, title: str, time: str, interval: str = None, channel: discord.TextChannel = None, mention: discord.Role = None, message: str = None):
-    # parse the specified time
+    # parse with dateparser
     try:
-        reminder_time = datetime.strptime(time, "%I:%M%p").time()
+        reminder_datetime = dateparser.parse(time)
+        if not reminder_datetime:
+            raise ValueError("Invalid time format.")
+        if reminder_datetime < datetime.now():
+            reminder_datetime += timedelta(days=1)
     except ValueError:
         await interaction.response.send_message(
-            "I'm sorry, that didn't work! Please input the time in a 12 hour format (e.g., 10:30pm)",
+            "I'm sorry, I couldn't understand that time. Try something like 'tomorrow at 9pm' or 'next Monday at 8am'.",
             ephemeral=True
-            )
+        )
         return
     
+    # check if the provided datetime is in the past
     now = datetime.now()
-    reminder_datetime = datetime.combine(now.date(), reminder_time)
-    if reminder_datetime < now:
-        reminder_datetime += timedelta(days=1)  # Schedule for the next day if time has passed
+    if reminder_datetime <= now:
+        await interaction.response.send_message(
+            "I'm sorry, but the specified time is in the past! Please provide a future date and time.",
+            ephemeral=True,
+        )
+        return
     
     # validate interval
-    valid_intervals = ["daily", "weekly", "monthly", "yearly"]
+    valid_intervals = ["daily", "weekly", "monthly"]
     if interval and interval.lower() not in valid_intervals:
         await interaction.response.send_message(
             f"I'm sorry, that interval isn't valid! Please choose from: {', '.join(valid_intervals)}.",
@@ -142,31 +161,63 @@ async def create_reminder(interaction: discord.Interaction, title: str, time: st
         "title": title,
         "time": reminder_datetime,
         "interval": interval.lower() if interval else None,
-        "channel": channel.id if channel else interaction.channel.id,
+        "channel": channel.id if channel else None, # use None for DM
         "mention": mention.id if mention else None,
+        "user_id": interaction.user.id,  # save the user ID for DM
         "message": message if message else f"This is your reminder: **{title}**"
     }
     
-    # insert into the database
+    try:
+        async with aiosqlite.connect(bot.database_file) as db:
+            cursor = await db.execute('''
+                INSERT INTO reminders (title, time, interval, channel, mention, message)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                reminder["title"],
+                reminder["time"].isoformat(),
+                reminder["interval"],
+                reminder["channel"],
+                reminder["mention"],
+                reminder["user_id"],
+                reminder["message"]
+            ))
+            reminder_id = cursor.lastrowid
+            await db.commit()
+
+            # add to the in-memory list with its database ID
+            reminder["id"] = reminder_id
+            bot.reminders.append(reminder)
+
+            # confirm with the user
+            destination = f"in {channel.mention}" if channel else "as a DM"
+            await interaction.response.send_message(
+                f"Okay! I'll make sure to remind you about '{title}' when it's '{time}'!", 
+                ephemeral=True
+            )
+    except Exception as e:
+        await interaction.response.send_message("Failed to set reminder. Please try again.", ephemeral=True)
+        print(f"Error setting reminder: {e}")
+        
+@bot.tree.command(name="list_reminders", description="View your active reminders.")
+async def list_reminders(interaction: discord.Interaction):
+    user_id = interaction.user.id
     async with aiosqlite.connect(bot.database_file) as db:
-        cursor = await db.execute('''
-            INSERT INTO reminders (title, time, interval, channel, mention, message)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            reminder["title"],
-            reminder["time"].isoformat(),
-            reminder["interval"],
-            reminder["channel"],
-            reminder["mention"],
-            reminder["message"]
-        ))
-        reminder_id = cursor.lastrowid
-        await db.commit()
-        
-    # add to the in-memory list with its database ID
-    reminder["id"] = reminder_id
-    bot.reminders.append(reminder)
-        
-    await interaction.response.send_message(f"Okay! I'll make sure to remind you about '{title}' when it's '{time}'!", ephemeral=True)
+        cursor = await db.execute(
+            "SELECT id, title, time, interval, message FROM reminders WHERE user_id = ?",
+            (user_id,)
+        )
+        reminders = await cursor.fetchall()
+
+    if not reminders:
+        await interaction.response.send_message("You have no active reminders.", ephemeral=True)
+        return
+
+    response = "**Your Active Reminders:**\n"
+    for reminder in reminders:
+        reminder_time = datetime.fromisoformat(reminder[2])
+        interval = reminder[3] or "One-time"
+        response += f"ID: {reminder[0]} | Title: {reminder[1]} | Time: {reminder_time.strftime('%Y-%m-%d %I:%M%p')} | Interval: {interval} | Message: {reminder[4]}\n"
+
+    await interaction.response.send_message(response, ephemeral=True)
 
 bot.run(os.getenv("TOKEN"))

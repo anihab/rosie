@@ -1,3 +1,4 @@
 aiosqlite
+dateparser
 discord.py
 python-dotenv

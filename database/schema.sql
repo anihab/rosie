@@ -5,5 +5,6 @@ CREATE TABLE IF NOT EXISTS reminders (
                     `interval` TEXT,
                     `channel` INTEGER NOT NULL,
                     `mention` INTEGER,
+                    `user_id` INTEGER,
                     `message` TEXT
                 )
