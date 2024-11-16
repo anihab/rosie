@@ -1,18 +1,17 @@
 import os
 import logging
-import dateparser
+from datetime import datetime, timedelta
+
 import aiosqlite
+import dateparser
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Set up intents
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -20,63 +19,71 @@ intents.reactions = True
 load_dotenv()
 GUILD_ID = discord.Object(os.getenv("GID"))
 
-class Client(commands.Bot):
+class RosieBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.database_file = f"{os.path.realpath(os.path.dirname(__file__))}/database/database.db"
+        self.database_file = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), "database", "database.db"
+        )
         self.reminders = []
 
     async def setup_hook(self):
-        await self.tree.sync(guild=discord.Object(int(os.getenv("GID"))))
+        guild_id = discord.Object(int(os.getenv("GID")))
+        await self.tree.sync(guild=guild_id)
         await self.init_db()
         await self.load_db()
 
     async def on_ready(self):
-        logger.info(f"Logged on as {self.user.name}!")
+        logger.info("Logged on as %s!", self.user.name)
         try:
-            # Sync commands after the bot is ready
             guild = GUILD_ID
-            synced = await self.tree.sync(guild=guild)
-            logger.info(f"I synced {len(synced)} commands to guild {guild.id}.")
-            # Start background task after bot is ready
+            synced_commands = await self.tree.sync(guild=guild)
+            logger.info("Synced %d commands to guild %d.", len(synced_commands), guild.id)
             self.check_reminders.start()
         except Exception as e:
             logger.error("Error syncing commands: %s", {e})
 
     async def init_db(self) -> None:
         async with aiosqlite.connect(self.database_file) as db:
-            with open(f"{os.path.realpath(os.path.dirname(__file__))}/database/schema.sql") as file:
-                await db.executescript(file.read())
+            schema_path = os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "database", "schema.sql"
+            )
+            with open(schema_path, "r") as schema_file:
+                await db.executescript(schema_file.read())
             await db.commit()
 
     async def load_db(self):
         async with aiosqlite.connect(self.database_file) as db:
             try:
-                async with db.execute("SELECT id, title, time, interval, channel, mention, user_id, message FROM reminders") as cursor:
+                async with db.execute(
+                    """
+                    SELECT id, title, time, interval, channel, mention, user_id, message
+                    FROM reminders
+                    """
+                ) as cursor:
                     rows = await cursor.fetchall()
                     for row in rows:
-                        reminder_id, title, time_str, interval, channel_id, mention_id, user_id, message = row
-                        reminder_datetime = datetime.fromisoformat(time_str)
-                        self.reminders.append({
-                            "id": reminder_id,
-                            "title": title,
-                            "time": reminder_datetime,
-                            "interval": interval,
-                            "channel": channel_id,
-                            "mention": mention_id,
-                            "user_id": user_id,
-                            "message": message
-                        })
+                        reminder = {
+                            "id": row[0],
+                            "title": row[1],
+                            "time": datetime.fromisoformat(row[2]),
+                            "interval": row[3],
+                            "channel": row[4],
+                            "mention": row[5],
+                            "user_id": row[6],
+                            "message": row[7],
+                        }
+                        self.reminders.append(reminder)
             except Exception as e:
-                logger.error("Error loading the database: %s", {e})
+                logger.error("Error loading the database: %s", e)
 
-    @tasks.loop(minutes=1)  # check every minute
+    @tasks.loop(minutes=1)
     async def check_reminders(self):
         now = datetime.now()
         async with aiosqlite.connect(self.database_file) as db:
             for reminder in self.reminders[:]:
                 if reminder["time"] <= now:
-                    # send the reminder
+                    # Send the reminder to specified channel or DM user
                     try:
                         if reminder["channel"]:
                             channel = self.get_channel(reminder["channel"])
@@ -90,7 +97,7 @@ class Client(commands.Bot):
                     except Exception as e:
                         logger.error("Failed to set reminder: %s", {e})
 
-                    # handle repeating reminders
+                    # Handle recurring reminders
                     if reminder["interval"] == "minutes":
                         reminder["time"] += timedelta(minutes=1)
                     elif reminder["interval"] == "hourly":
@@ -102,12 +109,15 @@ class Client(commands.Bot):
                     elif reminder["interval"] == "monthly":
                         reminder["time"] += timedelta(days=30)
                     else:
-                        self.reminders.remove(reminder)
-                        await db.execute("DELETE FROM reminders WHERE id = ?", (reminder["id"],))
+                        self.reminders.remove(reminder)        # delete one-time reminders
+                        await db.execute(
+                            "DELETE FROM reminders WHERE id = ?",
+                            (reminder["id"],),
+                        )
                         await db.commit()
-                        continue # skip updating if it's a one-time reminder
+                        continue
 
-                    # update the reminder time in the database for recurring reminders
+                    # Update recurring reminder time in the database
                     await db.execute(
                         "UPDATE reminders SET time = ? WHERE id = ?",
                         (reminder["time"].isoformat(), reminder["id"])
@@ -119,15 +129,15 @@ class Client(commands.Bot):
             return
         await self.process_commands(message)
 
-bot = Client(command_prefix="!", intents=intents)
+rosie = RosieBot(command_prefix="!", intents=intents)
 
 # Command: hello
-@bot.tree.command(name="hello", description="Say hello!", guild=GUILD_ID)
-async def seyHello(interaction: discord.Interaction):
-    await interaction.response.send_message(f"Hello there!")
+@rosie.tree.command(name="hello", description="Say hello!", guild=GUILD_ID)
+async def say_hello(interaction: discord.Interaction):
+    await interaction.response.send_message("Hello there!")
 
 # Command: create reminder
-@bot.tree.command(name="remind", description="Create a new reminder.", guild=GUILD_ID)
+@rosie.tree.command(name="remind", description="Create a new reminder.", guild=GUILD_ID)
 @app_commands.describe(
     title="Title of the reminder",
     time="Time for the reminder (e.g., Monday at 8am)",
@@ -136,7 +146,15 @@ async def seyHello(interaction: discord.Interaction):
     mention="Role to mention",
     message="Custom message for the reminder"
 )
-async def create_reminder(interaction: discord.Interaction, title: str, time: str, interval: str = None, channel: discord.TextChannel = None, mention: discord.Role = None, message: str = None):
+async def create_reminder(
+    interaction: discord.Interaction,
+    title: str,
+    time: str,
+    interval: str = None,
+    channel: discord.TextChannel = None,
+    mention: discord.Role = None,
+    message: str = None,
+):
     try:
         reminder_datetime = dateparser.parse(time)
         if not reminder_datetime or reminder_datetime <= datetime.now():
@@ -215,7 +233,7 @@ async def create_reminder(interaction: discord.Interaction, title: str, time: st
             return
     
     try:
-        async with aiosqlite.connect(bot.database_file) as db:
+        async with aiosqlite.connect(rosie.database_file) as db:
             cursor = await db.execute('''
                 INSERT INTO reminders (title, time, interval, channel, mention, user_id, message)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -230,7 +248,7 @@ async def create_reminder(interaction: discord.Interaction, title: str, time: st
             ))
             reminder["id"] = cursor.lastrowid
             await db.commit()
-            bot.reminders.append(reminder)
+            rosie.reminders.append(reminder)
 
             # confirm with the user
             destination = f"in {channel.mention}" if channel else "through DM"
@@ -245,11 +263,11 @@ async def create_reminder(interaction: discord.Interaction, title: str, time: st
             ephemeral=True
         )
   
-# command: list reminders      
-@bot.tree.command(name="list", description="View your active reminders.")
+# Command: list reminders      
+@rosie.tree.command(name="list", description="View your active reminders.")
 async def list_reminders(interaction: discord.Interaction):
     user_id = interaction.user.id
-    async with aiosqlite.connect(bot.database_file) as db:
+    async with aiosqlite.connect(rosie.database_file) as db:
         cursor = await db.execute(
             "SELECT id, title, time, interval, message FROM reminders WHERE user_id = ?",
             (user_id,)
@@ -268,4 +286,4 @@ async def list_reminders(interaction: discord.Interaction):
 
     await interaction.response.send_message(response, ephemeral=True)
 
-bot.run(os.getenv("TOKEN"))
+rosie.run(os.getenv("TOKEN"))
