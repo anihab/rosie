@@ -91,5 +91,5 @@ class Rosie(commands.Bot):
                 f"Successfully executed {command_name} command by {context.author} via DM"
             )
 
-bot = Rosie()
-bot.run(os.getenv("TOKEN"))
+rosie = Rosie()
+rosie.run(os.getenv("TOKEN"))
