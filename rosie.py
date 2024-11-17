@@ -2,6 +2,7 @@ import json
 import os
 import logging
 import sys
+from datetime import datetime, timezone
 
 import aiosqlite
 import discord
@@ -18,6 +19,7 @@ else:
     with open(config_path, "r") as config_file:
         config = json.load(config_file)
 
+# TODO: set up logger file (remember to add it to .gitignore)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -35,17 +37,22 @@ class Rosie(commands.Bot):
         self.config = config
        
     async def setup_hook(self) -> None:
-        logger.info("Logged on as %s!", self.user.name)
-        # TODO: change this to an owner-only message command !!
-        try:
-            await self.tree.sync(guild=discord.Object(id=os.getenv("GID")))
-            self.logger.info("Commands synced successfully.")
-        except Exception as e:
-            self.logger.error("Error syncing commands: %s", e)
-            
+        await self.tree.sync(guild=discord.Object(int(os.getenv("GID"))))            
         await self.init_db()
         await self.load_cogs()
-        self.set_status.start()
+        
+    async def on_ready(self):
+        logger.info("Logged on as %s!", self.user.name)
+        try:
+            # sync commands after the bot is ready
+            guild = discord.Object(os.getenv("GID"))
+            synced = await self.tree.sync(guild=guild)
+            logger.info(f"Synced {len(synced)} commands to guild {guild.id}")
+            # start background task after bot is ready
+            self.set_status.start()
+            self.start_time = datetime.now(timezone.utc)
+        except Exception as e:
+            logger.info("Error syncing commands: %s", e)
         
     async def init_db(self) -> None:
         async with aiosqlite.connect(self.database_file) as db:
@@ -79,17 +86,6 @@ class Rosie(commands.Bot):
         if message.author == self.user or message.author.bot:
             return
         await self.process_commands(message)
-
-    async def on_command_completion(self, context: Context) -> None:
-        command_name = context.command.qualified_name
-        if context.guild is not None:
-            self.logger.info(
-                f"Successfully executed {command_name} command in {context.guild.name} by {context.author}"
-            )
-        else:
-            self.logger.info(
-                f"Successfully executed {command_name} command by {context.author} via DM"
-            )
 
 rosie = Rosie()
 rosie.run(os.getenv("TOKEN"))

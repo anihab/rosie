@@ -1,6 +1,6 @@
 import os
 import re
-import datetime
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
@@ -16,10 +16,12 @@ class Owner(commands.Cog):
 
     def __init__(self, bot) -> None:
         self.bot = bot
+        self.bot.blacklist = {}
       
     # Command: set prefix   
-    @commands.command(name="setprefix", description="Let's set a new prefix for you, what should it be?")
+    @commands.hybrid_command(name="setprefix", description="Let's set a new prefix for you, what should it be?")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def setprefix(self, context: Context, prefix: str) -> None:
         self.bot.command_prefix = prefix
         embed = discord.Embed(
@@ -31,8 +33,9 @@ class Owner(commands.Cog):
     # Command: status 
     @commands.hybrid_command(name="status", description="Let me tell you how I'm doing!")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def status(self, context: Context) -> None:
-        uptime = datetime.utcnow() - self.bot.start_time
+        uptime = datetime.now(timezone.utc) - self.bot.start_time
         embed = discord.Embed(
             description=f"rosie's doing well! \n*uptime:* `{str(uptime).split('.')[0]}`",
             color=0xf9e5e0,
@@ -40,9 +43,10 @@ class Owner(commands.Cog):
         await context.send(embed=embed)
 
     # Command: sync
-    @commands.command(name="sync", description="Sync slash commands.")
+    @commands.hybrid_command(name="sync", description="Sync slash commands.")
     @app_commands.describe(scope="Can be `global` or `guild`.")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def sync(self, context: Context, scope: str) -> None:
         if scope == "global":
             await context.bot.tree.sync()
@@ -69,8 +73,9 @@ class Owner(commands.Cog):
             await context.send(embed=embed)
 
     # Command: unsync
-    @commands.command(name="unsync", description="Unsync slash commands")
+    @commands.hybrid_command(name="unsync", description="Unsync slash commands")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def unsync(self, context: Context, scope: str) -> None:
         if scope == "global":
             context.bot.tree.clear_commands(guild=None)
@@ -100,6 +105,7 @@ class Owner(commands.Cog):
     # Command: load
     @commands.hybrid_command(name="load", description="Load a new cog.")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def load(self, context: Context, cog: str) -> None:
         try:
             await self.bot.load_extension(f"cogs.{cog}")
@@ -110,15 +116,15 @@ class Owner(commands.Cog):
             await context.send(embed=embed)
         except Exception as e:
             embed = discord.Embed(
-                description=f"oh no, i couldn't load the `{cog}` cog... 
-                            \n here's the error message for you: {e} 🐰💨",
+                description=f"oh no, i couldn't load the `{cog}` cog... here's the error message for you: {e} 🐰💨",
                 color=0xf8bdb9,
             )
             await context.send(embed=embed)
       
     # Command: load all      
-    @commands.command(name="loadall", description="I'll load up all the cogs for you!")
+    @commands.hybrid_command(name="loadall", description="I'll load up all the cogs for you!")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def loadall(self, context: Context) -> None:
         for filename in os.listdir("./cogs"):
             if filename.endswith(".py"):
@@ -127,8 +133,7 @@ class Owner(commands.Cog):
                     await self.bot.load_extension(f"cogs.{cog}")
                     await context.send(f"loaded the `{cog}` cog...")
                 except Exception as e:
-                    await context.send(f"oh no, i couldn't load the `{cog}` cog... 
-                                       \n here's the error message for you: {e}")
+                    await context.send(f"oh no, i couldn't load the `{cog}` cog... here's the error message for you: {e}")
         embed = discord.Embed(
                 description=f"success! i've loaded all the cogs for you.",
                 color=0xf9e5e0,
@@ -138,6 +143,7 @@ class Owner(commands.Cog):
     # Command: unload
     @commands.hybrid_command(name="unload", description="Unload a cog.")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def unload(self, context: Context, cog: str) -> None:
         try:
             await self.bot.unload_extension(f"cogs.{cog}")
@@ -157,6 +163,7 @@ class Owner(commands.Cog):
     @commands.hybrid_command(name="reload", description="Reload a cog.")
     @app_commands.describe(cog="The cog to reload")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def reload(self, context: Context, cog: str) -> None:
         try:
             await self.bot.reload_extension(f"cogs.{cog}")
@@ -175,6 +182,7 @@ class Owner(commands.Cog):
     # Command: snuggle_up (shutdown)
     @commands.hybrid_command(name="snuggle_up", description="Put me to sleep.")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def snuggle_up(self, context: Context) -> None:
         embed = discord.Embed(
             description="i'll snuggle up for a nap now. sweet dreams! 💤🐰",
@@ -186,6 +194,7 @@ class Owner(commands.Cog):
     # Command: chirp (speak)
     @commands.hybrid_command(name="chirp", description="I'll repeat whatever you say!")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def chirp(self, context: Context, message: str) -> None:
         await context.send(f"{message}")
 
@@ -198,8 +207,9 @@ class Owner(commands.Cog):
         message="The message you'd like me to repeat.",
         color="The color you'd like the embed to be. Please use a hex code like `#ffffff` or `ffffff`",
     )
-    @commands.is_owner()
-    async def embed(self, context: Context, message: str, color: int = None) -> None:
+    @commands.is_owner() # TODO: DOUBLE TRIPLE CHECK THIS BY ADDING OWNERID TO CONFIG FILE
+    @app_commands.guilds(GUILD)
+    async def embed(self, context: Context, message: str, color: str = None) -> None:
         embed_color = 0xf9e5e0
         # validate color if provided
         if color:
@@ -213,12 +223,13 @@ class Owner(commands.Cog):
                 )
                 await context.send(embed=embed)
                 return
-        embed = discord.Embed(description=message, color=color)
+        embed = discord.Embed(description=message, color=embed_color)
         await context.send(embed=embed) 
         
     # Command: clear
-    @commands.command(name="clear", description="Let me tidy up for you, how many messages should I clear?")
+    @commands.hybrid_command(name="clear", description="Let me tidy up for you, how many messages should I clear?")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def clear(self, context: Context, amount: int) -> None:
         await context.channel.purge(limit=amount)
         embed = discord.Embed(
@@ -228,8 +239,9 @@ class Owner(commands.Cog):
         await context.send(embed=embed)
       
     # Command: set status  
-    @commands.command(name="setstatus", description="Let's set my status! What would you like me to do today?")
+    @commands.hybrid_command(name="setstatus", description="Let's set my status! What would you like me to do today?")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def setstatus(self, context: Context, activity_type: str, *, message: str) -> None:
         activity_types = {
             "playing": discord.Game,
@@ -250,8 +262,9 @@ class Owner(commands.Cog):
         await context.send(embed=embed)
         
     # Command: eval
-    @commands.command(name="eval", description="I'll give it a try! Show me your code!")
+    @commands.hybrid_command(name="eval", description="I'll give it a try! Show me your code!")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def _eval(self, context: Context, *, code: str) -> None:
         try:
             result = eval(code)
@@ -260,8 +273,9 @@ class Owner(commands.Cog):
             await context.send(f"oh no! something went wrong... {e} 🐰💦")
         
     # Command: debug    
-    @commands.command(name="debug", description="Let's check things out! Should I turn on debug mode?")
+    @commands.hybrid_command(name="debug", description="Let's check things out! Should I turn on debug mode?")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def debug(self, context: Context, enable: bool) -> None:
         if enable:
             self.bot.debug_mode = True
@@ -278,10 +292,11 @@ class Owner(commands.Cog):
         await context.send(embed=embed)
        
     # Command: blacklist     
-    @commands.command(name="blacklist", description="Let me help you keep things safe. I'll make sure this user can't interact with me.")
+    @commands.hybrid_command(name="blacklist", description="Let me help you keep things safe. I'll make sure this user can't interact with me.")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def blacklist(self, context: Context, user: discord.User) -> None:
-        self.bot.blacklisted_users.add(user.id)
+        self.bot.blacklist.add(user.id)
         embed = discord.Embed(
             description=f"{user.name} is now blacklisted and can't interact with me anymore.",
             color=0xf9e5e0,
@@ -289,10 +304,11 @@ class Owner(commands.Cog):
         await context.send(embed=embed)
       
     # Command: whitelist  
-    @commands.command(name="whitelist", description="Oh, this person gets another chance to play with me!")
+    @commands.hybrid_command(name="whitelist", description="Oh, this person gets another chance to play with me!")
     @commands.is_owner()
+    @app_commands.guilds(GUILD)
     async def whitelist(self, context: Context, user: discord.User) -> None:
-        self.bot.blacklisted_users.discard(user.id)
+        self.bot.blacklist.discard(user.id)
         embed = discord.Embed(
             description=f"all set! {user.name} is now whitelisted!",
             color=0xf9e5e0,

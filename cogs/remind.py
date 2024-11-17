@@ -98,6 +98,7 @@ class Reminder(commands.Cog):
         mention="Role to mention with the reminder.",
         message="Custom message for the reminder."
     )
+    @app_commands.guilds(GUILD)
     async def create_reminder(
         self,
         context: Context, 
@@ -219,7 +220,7 @@ class Reminder(commands.Cog):
 
     # Command: list reminders
     @commands.hybrid_command(name="list", description="View your active reminders")
-    @app_commands.guilds(GUILD) # For testing
+    @app_commands.guilds(GUILD)
     async def list_reminders(self, context: Context):
         """ List all reminders for the user. """
         user_id = context.author.id
