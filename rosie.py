@@ -65,8 +65,7 @@ class Rosie(commands.Bot):
         self.logger = logger
         self.config = config
        
-    async def setup_hook(self) -> None:
-        await self.tree.sync()            
+    async def setup_hook(self) -> None:        
         await self.init_db()
         await self.load_cogs()
         
@@ -133,8 +132,20 @@ class Rosie(commands.Bot):
                 color=0xf8bdb9
             )
             await context.send(embed, ephemeral=True)
+        elif isinstance(exception, commands.MissingPermissions):
+            embed = discord.Embed(
+                description="i'm sorry, you do not have the permissions to use this command.",
+                color=0xf8bdb9,
+            )
+            await context.send(embed=embed, ephemeral=True)
+        elif isinstance(exception, commands.ChannelNotFound):
+            embed = discord.Embed(
+                description="oh no! i couldn't find that channel. please double-check it.",
+                color=0xf8bdb9,
+            )
+            await context.send(embed=embed, ephemeral=True)
         else:
-            return await super().on_command_error(context, exception)       
+            await super().on_command_error(context, exception)       
 
 rosie = Rosie()
 rosie.run(os.getenv("TOKEN"))

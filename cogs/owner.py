@@ -1,5 +1,4 @@
 import os
-import re
 from datetime import datetime, timezone
 
 import discord
@@ -17,18 +16,6 @@ class Owner(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
         self.bot.blacklist = {}
-      
-    # Command: set prefix   
-    @commands.hybrid_command(name="setprefix", description="Let's set a new prefix for you, what should it be?")
-    @commands.is_owner()
-    @app_commands.guilds(GUILD)
-    async def setprefix(self, context: Context, prefix: str) -> None:
-        self.bot.command_prefix = prefix
-        embed = discord.Embed(
-            description=f"All done! I've set the new prefix to `{prefix}`!",
-            color=0xf9e5e0,
-        )
-        await context.send(embed=embed)
        
     # Command: status 
     @commands.hybrid_command(name="status", description="Let me tell you how I'm doing!")
@@ -190,53 +177,6 @@ class Owner(commands.Cog):
         )
         await context.send(embed=embed)
         await self.bot.close()
-
-    # Command: chirp (speak)
-    @commands.hybrid_command(name="chirp", description="I'll repeat whatever you say!")
-    @commands.is_owner()
-    @app_commands.guilds(GUILD)
-    async def chirp(self, context: Context, message: str) -> None:
-        await context.send(f"{message}")
-
-    # Command: embed
-    @commands.hybrid_command(
-        name="embed",
-        description="I'll say anything you want, but within embeds.",
-    )
-    @app_commands.describe(
-        message="The message you'd like me to repeat.",
-        color="The color you'd like the embed to be. Please use a hex code like `#ffffff` or `ffffff`",
-    )
-    @commands.is_owner() # TODO: DOUBLE TRIPLE CHECK THIS BY ADDING OWNERID TO CONFIG FILE
-    @app_commands.guilds(GUILD)
-    async def embed(self, context: Context, message: str, color: str = None) -> None:
-        embed_color = 0xf9e5e0
-        # validate color if provided
-        if color:
-            match = re.fullmatch(r"#?([a-fA-F0-9]{6})", color)
-            if match:
-                embed_color = int(match.group(1), 16)
-            else:
-                embed = discord.Embed(
-                    description="i'm sorry, i only understand colors in hex code, like `#ffffff` or `ffffff`.",
-                    color=0xf8bdb9,
-                )
-                await context.send(embed=embed)
-                return
-        embed = discord.Embed(description=message, color=embed_color)
-        await context.send(embed=embed) 
-        
-    # Command: clear
-    @commands.hybrid_command(name="clear", description="Let me tidy up for you, how many messages should I clear?")
-    @commands.is_owner()
-    @app_commands.guilds(GUILD)
-    async def clear(self, context: Context, amount: int) -> None:
-        await context.channel.purge(limit=amount)
-        embed = discord.Embed(
-            description=f"all done! i cleared {amount} messages! 🧹",
-            color=0xf9e5e0,
-        )
-        await context.send(embed=embed)
       
     # Command: set status  
     @commands.hybrid_command(name="setstatus", description="Let's set my status! What would you like me to do today?")
@@ -263,7 +203,7 @@ class Owner(commands.Cog):
         
     # Command: eval
     @commands.hybrid_command(name="eval", description="I'll give it a try! Show me your code!")
-    @commands.is_owner()
+    @commands.is_owner() # TODO: DOUBLE TRIPLE CHECK THIS BY ADDING OWNERID TO CONFIG FILE
     @app_commands.guilds(GUILD)
     async def _eval(self, context: Context, *, code: str) -> None:
         try:
