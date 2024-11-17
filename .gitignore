@@ -1,2 +1,11 @@
+# Cache
+__pycache__/
+
 # Environments
 .env
+
+# Configurations
+config.json
+
+# Database
+*.db
