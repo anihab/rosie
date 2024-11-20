@@ -77,7 +77,7 @@ class Rosie(commands.Bot):
         logger.info("Logged on as %s!", self.user.name)
         try:
             # start background tasks after bot is ready
-            # self.set_status.start()
+            self.set_status.start()
             self.start_time = datetime.now(timezone.utc)
         except Exception as e:
             logger.error("Error on startup: %s", e)
@@ -86,7 +86,7 @@ class Rosie(commands.Bot):
         for task in asyncio.all_tasks():
             if task is not asyncio.current_task():
                 task.cancel()
-        await self.close_db()
+        await self.db.close()
         await self.close()
                 
     async def init_db(self) -> None:
@@ -109,13 +109,13 @@ class Rosie(commands.Bot):
                 except Exception as e:
                     logger.error("Error loading the %s cog: %s", cog, e)
                     
-    # @tasks.loop(minutes=1.0)
-    # async def set_status(self) -> None:
-    #     await self.change_presence(activity=discord.Game("with you!"))
+    @tasks.loop(minutes=1.0)
+    async def set_status(self) -> None:
+        await self.change_presence(activity=discord.Game("with you!"))
 
-    # @set_status.before_loop
-    # async def before_set_status(self) -> None:
-    #     await self.wait_until_ready()
+    @set_status.before_loop
+    async def before_set_status(self) -> None:
+        await self.wait_until_ready()
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author == self.user or message.author.bot:

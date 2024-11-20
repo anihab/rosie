@@ -5,6 +5,7 @@ from dateutil.relativedelta import relativedelta
 from dateutil import parser
 from dateutil.tz import gettz
 
+import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -44,77 +45,89 @@ class Remind(commands.Cog):
         Check for the closest reminder and dynamically adjust the next check.
         """
         try:
-            self.bot.logger.info("Started check_reminders background task")
+            # check for any due reminders due now or earlier
             now = datetime.now(gettz("UTC"))
             async with self.bot.db.execute(
-                "SELECT id, time FROM reminders WHERE time > ? ORDER BY time ASC",
+                """
+                SELECT id, interval, channel_id, role_id, user_id, message
+                FROM reminders
+                WHERE time <= ?
+                """,
                 (now.isoformat(),),
             ) as cursor:
                 reminders = await cursor.fetchall()
             
-            if not reminders:
+            if reminders:
+                await self.process_due_reminders(reminders)
+            
+            # calculate the next reminder for the next time check    
+            async with self.bot.db.execute(
+                """
+                SELECT id, time 
+                FROM reminders 
+                WHERE time > ? ORDER BY time ASC LIMIT 1
+                """,
+                (now.isoformat(),),
+            ) as cursor:
+                upcoming_reminders = await cursor.fetchone()
+              
+            # sleep until the next reminder is due or a new reminder is added
+            if not upcoming_reminders:
                 self.bot.logger.info("No reminders found, sleeping for 24 hours.")
                 await self.dynamic_sleep(self.max_sleep_duration)
                 return
             
-            closest_id, closest_time = reminders[0]
+            closest_id, closest_time = upcoming_reminders[0]
             wait_time = (parser.isoparse(closest_time) - now).total_seconds()
             self.bot.logger.info("Next reminder ID: %s at %s in %s seconds", closest_id, closest_time, wait_time)
-            
-            # sleep until the next reminder is due or a new reminder is added
             await self.dynamic_sleep(wait_time)
-            await self.process_due_reminders()
+            
+        except aiosqlite.Error as e:
+            self.bot.logger.error("Database error in check_reminders: %s", e)
         except Exception as e:
-            self.bot.logger.error("Error in check_reminders: %s", e) 
+            self.bot.logger.error("Unexpected error in check_reminders: %s", e) 
                 
-    async def process_due_reminders(self) -> None:
+    async def process_due_reminders(self, reminders) -> None:
         """
         Process reminders that are now due and notify the user.
         """
         now = datetime.now(gettz("UTC"))
-        async with self.bot.db.execute(
-            """
-            SELECT id, interval, channel_id, role_id, user_id, message
-            FROM reminders
-            WHERE time <= ?
-            """,
-            (now.isoformat(),),
-        ) as cursor:
-            reminders = await cursor.fetchall()
-            
-        for reminder in reminders:
-            reminder_id, interval, channel_id, role_id, user_id, message = reminder
-            user = await self.bot.fetch_user(user_id)
-            channel = self.bot.get_channel(channel_id)
-            
-            if channel:
-                role_mention = f"<@&{role_id}>" if role_id else ""
-                await channel.send(f"{role_mention} {message}")
-            else:
-                await user.send(f"{message}")
-                
-            # handle recurring reminders
-            try:
-                if interval:
-                    next_time = await self.calculate_next_time(now, interval)
-                    await self.bot.db.transaction(
-                        "UPDATE reminders SET time = ? WHERE id = ?",
-                        (next_time.isoformat(), reminder_id),
-                    )
-                else:
-                    await self.bot.db.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-                self.bot.logger.info("Processed reminder ID: %s", reminder_id)
-            except Exception as e:
-                self.bot.logger.error("Error updating reminder in database: %s", e)  
+        try:
+            async with self.bot.db.begin():
+                for reminder in reminders:
+                    reminder_id, interval, channel_id, role_id, user_id, message = reminder
+                    user = await self.bot.fetch_user(user_id)
+                    channel = self.bot.get_channel(channel_id)
+
+                    if channel:
+                        role_mention = f"<@&{role_id}>" if role_id else ""
+                        await channel.send(f"{role_mention} {message}")
+                    else:
+                        await user.send(f"{message}")
+
+                    # handle recurring reminders
+                    if interval:
+                        next_time = await self.calculate_next_time(now, interval)
+                        await self.bot.db.execute(
+                            "UPDATE reminders SET time = ? WHERE id = ?",
+                            (next_time.isoformat(), reminder_id),
+                        )
+                    else:
+                        await self.bot.db.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+                    self.bot.logger.info("Processed reminder ID: %s", reminder_id)
+
+        except aiosqlite.Error as e:
+            self.bot.logger.error("Database error processing reminders: %s", e)
+        except Exception as e:
+            self.bot.logger.error("Unexpected error processing reminders: %s", e)
  
     async def calculate_next_time(self, current_time, interval) -> datetime:
         """ 
         Calculate the next time for a recurring reminder based on the given interval.
         """
         num, unit = interval.split(' ')
-        if unit == "minutes":
-            return current_time + timedelta(minutes=num)
-        elif unit == "hours":
+        num = int(num)
+        if unit == "hours":
             return current_time + timedelta(hours=num)
         elif unit == "days":
             return current_time + timedelta(days=num)
@@ -146,12 +159,25 @@ class Remind(commands.Cog):
         if unit in ["minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "month", "months"]:
             return num, unit
         raise ValueError("Unsupported time unit.")
+    
+    async def can_add_reminder(self, user_id):
+        """ Check how many active reminders the user has. """
+        async with self.bot.db.execute(
+            """
+            SELECT COUNT(*) FROM reminders
+            WHERE user_id = ? AND time > ?
+            """,
+            (user_id, datetime.now(gettz("UTC")).isoformat()),
+        ) as cursor:
+            result = await cursor.fetchone()
+            reminder_count = result[0]
+            return reminder_count < 5
 
     # Command: create reminder
     @commands.hybrid_command(name="remind", description="Create a new reminder!")
     @app_commands.describe(
         title="What is this reminder for?",
-        time="What time should I remind you at? If it it for today, please say so!(e.g., 'Today at 10:30am' or 'Monday at 8pm')",
+        time="When should I remind you? If it is for today, please say so!(e.g., 'Today at 10:30am' or 'Monday at 8pm')",
         timezone="Include a timezone so I can accurately convert for you! Don't worry, I won't save this information. (e.g., 'America/New_York' or 'UTC')",
         interval="How often should I remind you? If left blank, I'll only remind you once!  (e.g., 'daily', 'every 2 weeks')",
         channel="Is there a channel you'd like me send this reminder in? If not, I'll send you a DM!",
@@ -160,17 +186,19 @@ class Remind(commands.Cog):
     )
     async def create_reminder(self, context: Context, title: str, time: str, timezone: str, interval: str = None, 
                               channel: discord.TextChannel = None, role: discord.Role = None, message: str = None):
+        # check if user has 5 active reminders
+        if not await self.can_add_reminder(context.author.id):
+            await context.send("you can only have up to 5 active reminders at a time. sorry, i'm still a small bot!")
+            return
+    
         timezone = timezone.strip().replace(" ", "_")
         if not gettz(timezone):
-            await context.send("i couldn't find that timezone! please provide a valid timezone like `America/New_York` or `UTC`.", ephemeral=True)
+            await context.send("i couldn't find that timezone! please provide a valid timezone like `America/New York` or `UTC`.", ephemeral=True)
             return
         
         # parse the reminder time using the given timezone
         settings={"TIMEZONE": timezone, "TO_TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": True}
         parsed_time = dateparser.parse(time, settings=settings)
-        self.bot.logger.info("parsed_time comparison: %s", parsed_time <= datetime.now(gettz("UTC")))
-        self.bot.logger.info("parsed time: %s", parsed_time)
-        self.bot.logger.info("now: %s", datetime.now(gettz("UTC")))
         if not parsed_time or parsed_time <= datetime.now(gettz("UTC")):
             await context.send(
                 "i'm sorry, that time didn't work. please provide a valid future time like 'tomorrow at 9pm' or 'next Monday at 8am'.",
@@ -193,7 +221,7 @@ class Remind(commands.Cog):
         
         # save the reminder to the database
         try:
-            default_message = (f"hey, just checking in! you have a reminder for **{title}** at this time.\n"
+            default_message = (f"hey, just checking in! you have a reminder **{title}** at this time.\n"
                                "let me know if you completed this task!")
             
             async with self.bot.db.execute(
@@ -213,17 +241,17 @@ class Remind(commands.Cog):
             self.sleep_event.set() # signal the background task to wake up and recalculate
         
             # notify the user
-            destination = f"in {channel.mention}" if channel else "though DM"
+            destination = f"in {channel.mention}" if channel else "through DMs"
             await context.send(
-                f"all set! i've created the reminder **'{title}'** for {time}- that's {parsed_time}!\n"
-                "i'll let you know {destination}!",
+                f"all set! i've created the reminder **'{title}'** for {time}- that's {parsed_time} UTC!\n"
+                f"i'll let you know {destination}!",
                 ephemeral=True
             )
         except Exception as e:
             await context.send("something went wrong while creating the reminder. please try again later.", ephemeral=True)
             self.bot.logger.error("Error when creating reminder: %s", e)
             
-    # Command: view reminders
+    # Command: list reminders
     @commands.hybrid_command(name="reminders", help="View a list of all your active reminders.")
     async def list_reminders(self, context: Context):
         user_id = context.author.id
@@ -252,7 +280,7 @@ class Remind(commands.Cog):
             await context.send(embed=embed, ephemeral=True)
         except Exception as e:
             await context.send("i'm sorry, i couldn't fetch your reminders! try again later.", ephemeral=True)
-            self.bot.logger.error("Error in list_reminders: %s", e)
+            self.bot.logger.error("Error listing reminders: %s", e)
        
     # Command: delete reminder     
     @commands.hybrid_command(name="deletereminder", help="Delete one of your reminders by its ID.")
@@ -274,8 +302,8 @@ class Remind(commands.Cog):
             await self.bot.db.commit()
             await context.send(f"reminder with ID `{reminder_id}` has been deleted!", ephemeral=True)
         except Exception as e:
-            await context.send("'m sorry, something went wrong while deleting your reminder! try again later.", ephemeral=True)
-            self.bot.logger.error(f"Error in delete_reminder: {e}")
+            await context.send("i'm sorry, something went wrong while deleting your reminder! try again later.", ephemeral=True)
+            self.bot.logger.error("Error when deleting reminder: %s", e)
 
 async def setup(bot) -> None:
     await bot.add_cog(Remind(bot))
