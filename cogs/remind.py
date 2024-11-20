@@ -18,6 +18,8 @@ class Remind(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.check_reminders.start()
+        self.sleep_event = asyncio.Event()
+        self.max_sleep_duration = 24 * 60 * 60  # cap at 24 hours
 
     async def cog_load(self):
         if not self.check_reminders.is_running():
@@ -25,38 +27,50 @@ class Remind(commands.Cog):
 
     async def cog_unload(self):
         if self.check_reminders.is_running():
+            self.sleep_event.set()  # wake up sleeping tasks
             self.check_reminders.cancel()
-    
+            
+    async def dynamic_sleep(self, sleep_time: float):
+        try:
+            await asyncio.wait_for(self.sleep_event.wait(), timeout=sleep_time)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self.sleep_event.clear()
+            
     @tasks.loop(minutes=1)
     async def check_reminders(self) -> None:
         """
         Check for the closest reminder and dynamically adjust the next check.
         """
-        self.bot.logger.info("Started check_reminders background task")
-        now = datetime.now(gettz("UTC"))
-        async with self.bot.db.execute(
-            "SELECT id, time FROM reminders WHERE time > ? ORDER BY time ASC",
-            (now.isoformat(),),
-        ) as cursor:
-            reminders = await cursor.fetchall()
+        try:
+            self.bot.logger.info("Started check_reminders background task")
+            now = datetime.now(gettz("UTC"))
+            async with self.bot.db.execute(
+                "SELECT id, time FROM reminders WHERE time > ? ORDER BY time ASC",
+                (now.isoformat(),),
+            ) as cursor:
+                reminders = await cursor.fetchall()
             
-        if not reminders:
-            self.bot.logger.info("No reminders found, stopping background task.")
-            return # the loop will start again once someone runs the command
-        
-        closest_time = parser.isoparse(reminders[0][1])
-        wait_time = (closest_time - now).total_seconds()
-        
-        if wait_time > 0:
-            self.bot.logger.info("Sleeping for %s seconds", wait_time)
-            await asyncio.sleep(wait_time) # wait until the closest reminder is due
-        await self.process_due_reminders() 
+            if not reminders:
+                self.bot.logger.info("No reminders found, sleeping for 24 hours.")
+                await self.dynamic_sleep(self.max_sleep_duration)
+                return
+            
+            closest_id, closest_time = reminders[0]
+            wait_time = (parser.isoparse(closest_time) - now).total_seconds()
+            self.bot.logger.info("Next reminder ID: %s at %s in %s seconds", closest_id, closest_time, wait_time)
+            
+            # sleep until the next reminder is due or a new reminder is added
+            await self.dynamic_sleep(wait_time)
+            await self.process_due_reminders()
+        except Exception as e:
+            self.bot.logger.error("Error in check_reminders: %s", e) 
                 
     async def process_due_reminders(self) -> None:
         """
         Process reminders that are now due and notify the user.
         """
-        self.bot.logger.info("Starting to process due reminder.")
         now = datetime.now(gettz("UTC"))
         async with self.bot.db.execute(
             """
@@ -78,25 +92,18 @@ class Remind(commands.Cog):
                 await channel.send(f"{role_mention} {message}")
             else:
                 await user.send(f"{message}")
-            self.bot.logger.info("Reminder sent!")
                 
             # handle recurring reminders
             try:
                 if interval:
                     next_time = await self.calculate_next_time(now, interval)
-                    self.bot.logger.debug("next_time type: %s, value: %s", type(next_time), next_time)
-                    self.bot.logger.debug("interval type: %s, value: %s", type(interval), interval)
-                    if next_time:
-                        await self.bot.db.execute(
-                            "UPDATE reminders SET time = ? WHERE id = ?",
-                            (next_time.isoformat(), reminder_id),
-                        )
-                    else:
-                        await self.bot.db.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-                        self.bot.logger.info("Recurring reminder deleted from database.")
+                    await self.bot.db.transaction(
+                        "UPDATE reminders SET time = ? WHERE id = ?",
+                        (next_time.isoformat(), reminder_id),
+                    )
                 else:
                     await self.bot.db.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-                    self.bot.logger.info("One-time reminder deleted from database.")
+                self.bot.logger.info("Processed reminder ID: %s", reminder_id)
             except Exception as e:
                 self.bot.logger.error("Error updating reminder in database: %s", e)  
  
@@ -104,9 +111,7 @@ class Remind(commands.Cog):
         """ 
         Calculate the next time for a recurring reminder based on the given interval.
         """
-        current_time = parser.isoparse(current_time)
         num, unit = interval.split(' ')
-        num, unit = self.parse_interval(interval)
         if unit == "minutes":
             return current_time + timedelta(minutes=num)
         elif unit == "hours":
@@ -146,7 +151,7 @@ class Remind(commands.Cog):
     @commands.hybrid_command(name="remind", description="Create a new reminder!")
     @app_commands.describe(
         title="What is this reminder for?",
-        time="What time should I remind you at? (e.g., 'Monday at 8pm')",
+        time="What time should I remind you at? If it it for today, please say so!(e.g., 'Today at 10:30am' or 'Monday at 8pm')",
         timezone="Include a timezone so I can accurately convert for you! Don't worry, I won't save this information. (e.g., 'America/New_York' or 'UTC')",
         interval="How often should I remind you? If left blank, I'll only remind you once!  (e.g., 'daily', 'every 2 weeks')",
         channel="Is there a channel you'd like me send this reminder in? If not, I'll send you a DM!",
@@ -155,6 +160,7 @@ class Remind(commands.Cog):
     )
     async def create_reminder(self, context: Context, title: str, time: str, timezone: str, interval: str = None, 
                               channel: discord.TextChannel = None, role: discord.Role = None, message: str = None):
+        timezone = timezone.strip().replace(" ", "_")
         if not gettz(timezone):
             await context.send("i couldn't find that timezone! please provide a valid timezone like `America/New_York` or `UTC`.", ephemeral=True)
             return
@@ -162,6 +168,9 @@ class Remind(commands.Cog):
         # parse the reminder time using the given timezone
         settings={"TIMEZONE": timezone, "TO_TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": True}
         parsed_time = dateparser.parse(time, settings=settings)
+        self.bot.logger.info("parsed_time comparison: %s", parsed_time <= datetime.now(gettz("UTC")))
+        self.bot.logger.info("parsed time: %s", parsed_time)
+        self.bot.logger.info("now: %s", datetime.now(gettz("UTC")))
         if not parsed_time or parsed_time <= datetime.now(gettz("UTC")):
             await context.send(
                 "i'm sorry, that time didn't work. please provide a valid future time like 'tomorrow at 9pm' or 'next Monday at 8am'.",
@@ -201,17 +210,15 @@ class Remind(commands.Cog):
             ) as cursor:
                 pass
             await self.bot.db.commit()
+            self.sleep_event.set() # signal the background task to wake up and recalculate
         
             # notify the user
             destination = f"in {channel.mention}" if channel else "though DM"
             await context.send(
-                f"all set! i've created the reminder **'{title}'** for {time}. i'll let you know {destination}!",
+                f"all set! i've created the reminder **'{title}'** for {time}- that's {parsed_time}!\n"
+                "i'll let you know {destination}!",
                 ephemeral=True
             )
-            
-            # start background task
-            if not self.check_reminders.is_running():
-                self.check_reminders.start()
         except Exception as e:
             await context.send("something went wrong while creating the reminder. please try again later.", ephemeral=True)
             self.bot.logger.error("Error when creating reminder: %s", e)

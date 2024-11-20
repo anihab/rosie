@@ -243,6 +243,15 @@ class Owner(commands.Cog):
             await context.send(embed=embed, ephemeral=True)
         except Exception:
             await context.send("huh? that user was never blacklisted, are you sure that's right?", ephemeral=True)
+            
+    @commands.hybrid_command(name="reset-reminders", description="Manually resets the reminder loop.")
+    @commands.is_owner()
+    async def reset_reminders(self, ctx):
+        if self.check_reminders.is_running():
+            self.check_reminders.cancel()
+            await ctx.send("Reminder loop reset successfully.")
+        self.check_reminders.start()
+        await ctx.send("Reminder loop restarted.")
 
 async def setup(bot) -> None:
     await bot.add_cog(Owner(bot))
