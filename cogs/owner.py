@@ -1,4 +1,5 @@
 import os
+import asyncio
 from datetime import datetime, timezone
 
 import discord
@@ -158,13 +159,13 @@ class Owner(commands.Cog):
     # Command: snuggle_up (shutdown)
     @commands.hybrid_command(name="snuggle_up", description="Put me to sleep.")
     @commands.is_owner()
-    async def snuggle_up(self, context: Context) -> None:
+    async def snuggle_up(self, context: Context) -> None:   
         embed = discord.Embed(
             description="i'll snuggle up for a nap now. sweet dreams! 💤",
             color=0xf9e5e0,
         )
         await context.send(embed=embed, ephemeral=True)
-        await self.bot.close()
+        await self.bot.shutdown()
       
     # Command: set status  
     @commands.hybrid_command(name="setstatus", description="Let's set my status! What would you like me to do today?")
@@ -244,7 +245,7 @@ class Owner(commands.Cog):
         except Exception:
             await context.send("huh? that user was never blacklisted, are you sure that's right?", ephemeral=True)
             
-    @commands.hybrid_command(name="reset-reminders", description="Manually resets the reminder loop.")
+    @commands.hybrid_command(name="remindreset", description="Manually resets the reminder loop.")
     @commands.is_owner()
     async def reset_reminders(self, ctx):
         if self.check_reminders.is_running():

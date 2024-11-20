@@ -223,8 +223,8 @@ class Remind(commands.Cog):
             await context.send("something went wrong while creating the reminder. please try again later.", ephemeral=True)
             self.bot.logger.error("Error when creating reminder: %s", e)
             
-    # Command: list reminders
-    @commands.hybrid_command(name="list-reminders", help="View all your reminders.")
+    # Command: view reminders
+    @commands.hybrid_command(name="reminders", help="View a list of all your active reminders.")
     async def list_reminders(self, context: Context):
         user_id = context.author.id
         try:
@@ -255,7 +255,7 @@ class Remind(commands.Cog):
             self.bot.logger.error("Error in list_reminders: %s", e)
        
     # Command: delete reminder     
-    @commands.hybrid_command(name="delete-reminder", help="Delete one of your reminders by its ID.")
+    @commands.hybrid_command(name="deletereminder", help="Delete one of your reminders by its ID.")
     async def delete_reminder(self, context: Context, reminder_id: int):
         user_id = context.author.id
         try:

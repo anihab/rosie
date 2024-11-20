@@ -13,7 +13,7 @@ or the discord.py documentation https://discordpy.readthedocs.io/en/stable/index
 Author: anisa
 Version: 1.0
 """
-
+import asyncio
 import json
 import logging
 import os
@@ -82,9 +82,12 @@ class Rosie(commands.Bot):
         except Exception as e:
             logger.error("Error on startup: %s", e)
 
-    async def on_shutdown(self) -> None:
+    async def shutdown(self) -> None:
+        for task in asyncio.all_tasks():
+            if task is not asyncio.current_task():
+                task.cancel()
         await self.close_db()
-        logger.info("Shutting down.")
+        await self.close()
                 
     async def init_db(self) -> None:
         self.db = await aiosqlite.connect(self.db_path)
