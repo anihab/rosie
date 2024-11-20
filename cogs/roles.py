@@ -1,4 +1,5 @@
 import asyncio
+
 import discord
 from discord import app_commands, PartialEmoji
 from discord.ext import commands
@@ -16,18 +17,24 @@ class ReactionRoles(commands.Cog):
             return {row[0]: row[1] for row in await cursor.fetchall()}
                 
     async def update_reaction_roles(self, message_id, emoji_role_mapping, guild_id):
-        # clear existing mappings
-        async with self.bot.db.execute(
-            "DELETE FROM reaction_roles WHERE message_id = ?", (message_id,)
-        ):
-            pass
-        # insert new mappings
-        for emoji, role_id in emoji_role_mapping.items():
-            await self.bot.db.execute(
-                "INSERT INTO reaction_roles (message_id, emoji, role_id, guild_id) VALUES (?, ?, ?, ?)",
-                (message_id, emoji, role_id, guild_id),
-            )
-        await self.bot.db.commit()
+        """
+        Updates reaction roles by upserting records for the given message_id.
+        Existing mappings will be updated; new mappings will be added.
+        """
+        try:
+            for emoji, role_id in emoji_role_mapping.items():
+                async with self.bot.db.execute(
+                    """
+                    INSERT INTO reaction_roles (message_id, emoji, role_id, guild_id)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(message_id, emoji)
+                    DO UPDATE SET role_id = excluded.role_id, guild_id = excluded.guild_id
+                    """,
+                    (message_id, emoji, role_id, guild_id),
+                ):
+                    self.bot.db.commit()
+        except Exception as e:
+            self.bot.logger.error("Error when updating reaction roles: %s", e)
         
     async def parse_reaction_payload(self, payload):
         emoji_role_mapping = await self.fetch_reaction_roles(payload.message_id)
@@ -40,7 +47,7 @@ class ReactionRoles(commands.Cog):
                 return role, user
         
     async def wait_for_message(self, context, check, timeout=120):
-        """Helper function to handle message waits with timeout."""
+        """ Helper function to handle message waits with timeout. """
         try:
             return await self.bot.wait_for("message", timeout=timeout, check=check)
         except asyncio.TimeoutError:
@@ -49,19 +56,19 @@ class ReactionRoles(commands.Cog):
         
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        role, user = self.parse_reaction_payload(payload)
+        role, user = await self.parse_reaction_payload(payload)
         if role and user:
             await user.add_roles(role)
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
-        role, user = self.parse_reaction_payload(payload)
+        role, user = await self.parse_reaction_payload(payload)
         if role and user:
             await user.remove_roles(role)
             
     # Command: reactionrole
     @commands.hybrid_command(name="reactionrole", description="Set up a reaction role message with my help!")
-    @commands.has_permissions(administrator=True)
+    @commands.has_permissions(manage_roles=True)
     async def reaction_roles(self, context: Context):
         """ Start a step-by-step setup for reaction roles. """
         def check_author(message):
@@ -157,11 +164,11 @@ class ReactionRoles(commands.Cog):
         except asyncio.TimeoutError:
                 await context.send("are you still there? just call me if you'd like to try again later~")
      
-     # Command: reactionroles-edit       
-    @commands.hybrid_command(name="reactionroles-edit", description="Edit an existing reaction roles message.")
+     # Command: edit roles       
+    @commands.hybrid_command(name="editroles", description="Edit an existing reaction roles message.")
     @app_commands.describe(message_id="The ID of the message you would like to edit.")
-    @commands.has_permissions(administrator=True)
-    async def edit_reaction_roles(self, context: Context, message_id, channel: discord.TextChannel):
+    @commands.has_permissions(manage_roles=True)
+    async def edit_roles(self, context: Context, message_id, channel: discord.TextChannel):
         """ Edit an existing reaction roles message """
         # Step 1: Fetch the message
         try:
