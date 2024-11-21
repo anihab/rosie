@@ -1,21 +1,30 @@
+import re
 import asyncio
 
 import discord
-from discord import app_commands, PartialEmoji
+from discord import app_commands
 from discord.ext import commands
 from discord.ext.commands import Context
+
+# matches unicode emojis or custom discord emojis (<:name:id> or <a:name:id>)
+EMOJI_REGEX = re.compile(
+    r"(<a?:\w+:\d{18}>|[\U0001F600-\U0001F64F]|[\U0001F300-\U0001F5FF]|"
+    r"[\U0001F680-\U0001F6FF]|[\U0001F1E6-\U0001F1FF]|[\u2600-\u26FF]|"
+    r"[\U0001F900-\U0001F9FF]|[\U0001FA70-\U0001FAFF]|[\U0001F700-\U0001F77F])"
+)
+
 
 class ReactionRoles(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
+
     async def fetch_reaction_roles(self, message_id):
         async with self.bot.db.execute(
             "SELECT emoji, role_id FROM reaction_roles WHERE message_id = ?",
-            (message_id,)
+            (message_id,),
         ) as cursor:
             return {row[0]: row[1] for row in await cursor.fetchall()}
-                
+
     async def update_reaction_roles(self, message_id, emoji_role_mapping, guild_id):
         """
         Updates reaction roles by upserting records for the given message_id.
@@ -23,7 +32,7 @@ class ReactionRoles(commands.Cog):
         """
         try:
             for emoji, role_id in emoji_role_mapping.items():
-                async with self.bot.db.execute(
+                await self.bot.db.execute(
                     """
                     INSERT INTO reaction_roles (message_id, emoji, role_id, guild_id)
                     VALUES (?, ?, ?, ?)
@@ -31,87 +40,139 @@ class ReactionRoles(commands.Cog):
                     DO UPDATE SET role_id = excluded.role_id, guild_id = excluded.guild_id
                     """,
                     (message_id, emoji, role_id, guild_id),
-                ):
-                    self.bot.db.commit()
+                )
+            await self.bot.db.commit()  # Commit after the loop
         except Exception as e:
             self.bot.logger.error("Error when updating reaction roles: %s", e)
-        
+
     async def parse_reaction_payload(self, payload):
-        emoji_role_mapping = await self.fetch_reaction_roles(payload.message_id)
-        role_id = emoji_role_mapping.get(str(payload.emoji))
-        if role_id:
-            guild = self.bot.get_guild(payload.guild_id)
-            role = guild.get_role(role_id)
-            user = guild.get_member(payload.user_id)
-            if role and user:
-                return role, user
+        """
+        Parses a reaction payload and fetches the corresponding role and user.
+        Returns a tuple of (role, user) or None if any lookup fails.
+        """
+        guild = self.bot.get_guild(payload.guild_id)
+        if not guild:
+            return None
         
-    async def wait_for_message(self, context, check, timeout=120):
-        """ Helper function to handle message waits with timeout. """
+        emoji_role_pairs = await self.fetch_reaction_roles(payload.message_id)
+        role = guild.get_role(emoji_role_pairs.get(str(payload.emoji)))
+        user = guild.get_member(payload.user_id)
+
+        if not role or not user:
+            self.bot.logger.warning(
+                "Role or user not found. Role: %s, User: %s (payload.guild_id: %s, payload.user_id: %s)",
+                role,
+                user,
+                payload.guild_id,
+                payload.user_id,
+            )
+            return None
+
+        if not role:
+            self.bot.logger.warning(
+                "No role found for emoji: %s in message_id: %s",
+                payload.emoji,
+                payload.message_id,
+            )
+            return None
+
+        return role, user
+
+    async def wait_for_message(self, context, check, prompt=None, timeout=120):
+        """Helper function to handle message waits with timeout."""
+        if prompt:
+            await context.send(prompt)
+
         try:
             return await self.bot.wait_for("message", timeout=timeout, check=check)
         except asyncio.TimeoutError:
-            await context.send("are you still there? just call me if you'd like to try again later~")
+            await context.send(
+                "are you still there? just call me if you'd like to try again later~"
+            )
             return None
-        
+
     @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+    async def on_raw_reaction_add(self, payload):
+        async with self.bot.db.execute(
+            "SELECT 1 FROM reaction_roles WHERE message_id = ? LIMIT 1", (payload.message_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        
+        if not row:
+            return
+        
         role, user = await self.parse_reaction_payload(payload)
         if role and user:
             await user.add_roles(role)
+        else:
+            self.bot.logger.warning("Failed to parse reaction payload: %s", payload)
 
     @commands.Cog.listener()
-    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
+    async def on_raw_reaction_remove(self, payload):
+        async with self.bot.db.execute(
+            "SELECT 1 FROM reaction_roles WHERE message_id = ? LIMIT 1", (payload.message_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        
+        if not row:
+            return
+        
         role, user = await self.parse_reaction_payload(payload)
         if role and user:
             await user.remove_roles(role)
-            
-    # Command: reactionrole
-    @commands.hybrid_command(name="reactionrole", description="Set up a reaction role message with my help!")
-    @commands.has_permissions(manage_roles=True)
-    async def reaction_roles(self, context: Context):
-        """ Start a step-by-step setup for reaction roles. """
-        def check_author(message):
-            return message.author == context.author and message.channel == context.channel
-
-        await context.send("hello! so you'd like me to set up a reaction role?\n"
-                           "which channel would you like the message to be in? please mention it like `#channel`.")
-
-        # Step 1: Select channel
-        channel_msg = await self.wait_for_message(context, check_author)
-        channel = await commands.TextChannelConverter().convert(context, channel_msg.content)
-
-        await context.send(f"alright, the channel is {channel.mention}! what would you like the message to say? "
-                           "use `|` to separate the title from the description, like so:\n"
-                           "`This is a title | this is a description`.\n"
-                           "if you'd like the message to include list of roles and their emojis, type `{roles}` "
-                           "in the description field.")
-
-        # Step 2: Compose message
-        message_content = await self.wait_for_message(context, check_author)
-        if "|" not in message_content.content:
-            await context.send("i couldn't understand that format. make sure to separate the title and "
-                                "description with `|`.")
-            return
-        title, description = map(str.strip, message_content.content.split("|", 1))
-
-        await context.send("got it! would you like the message to have a color? respond with a hex code like `#ffffff` "
-                           "or type `none` to skip.")
-
-        # Step 3: Choose color
-        color_msg = await self.wait_for_message(context, check_author)
-        if color_msg.content.lower() == "none":
-            embed_color = discord.Color.default()
         else:
+            self.bot.logger.warning("Failed to parse reaction payload: %s", payload)
+
+    # Command: reaction role
+    @commands.hybrid_command(
+        name="reactionrole",
+        description="Set up a reaction role message. Give me some basic info and then we'll get started!",
+    )
+    @commands.has_permissions(manage_roles=True)
+    @app_commands.describe(
+        title="What would you like the message title to be?",
+        description="What would you like the description to be? Type {roles} to include the list of roles!",
+        channel="What channel would you like the message to be in?",
+        color="What color should the embed be? (hex code like `#ffffff`)",
+    )
+    async def reaction_role(
+        self,
+        context: Context,
+        title: str,
+        description: str,
+        channel: discord.TextChannel,
+        color: str = None,
+    ):
+        """Create a reaction roles message."""
+
+        def check_author(message):
+            return (
+                message.author == context.author and message.channel == context.channel
+            )
+
+        def check_reaction(reaction, user):
+            return user == context.author and str(reaction.emoji) in [
+                ":white_check_mark",
+                ":x:",
+            ]
+
+        embed_color = discord.Color.default()
+        if color:
             try:
-                embed_color = discord.Color(int(color_msg.content.lstrip("#"), 16))
+                embed_color = discord.Color(int(color.lstrip("#"), 16))
             except ValueError:
-                await context.send("that doesn't look like a valid hex code. try again?")
+                await context.send(
+                    "sorry but that doesn't look like a valid hex code! try again?"
+                )
 
-        await context.send("now it's time to add roles! type each pair as `emoji: role name`, one per line. "
-                           "when you're done, type `done`.")
+        await context.send(
+            f"hello! so you'd like to set up a reaction role message in {channel.mention}?\n"
+            f"let's get started! please list the emoji-role pairs for me in this format: "
+            f"`emoji: role-name`. send pairs one by one and just type `done` when you're "
+            f"finished! for example:\n ```🌷: member\n🌸: admin\ndone```\n just start "
+            f"whenever you're ready!"
+        )
 
-        # Step 4: Add emoji-role pairs
         emoji_role_pairs = {}
         while True:
             role_msg = await self.wait_for_message(context, check_author, timeout=300)
@@ -119,133 +180,64 @@ class ReactionRoles(commands.Cog):
                 break
 
             try:
-                emoji_str, role_name = map(str.strip, role_msg.content.split(":", 1))
-                emoji = PartialEmoji.from_str(emoji_str)
-                if not emoji.is_unicode_emoji() and not emoji.id:
+                emoji, role_name = map(str.strip, role_msg.content.split(":", 1))
+
+                if not EMOJI_REGEX.fullmatch(emoji):
                     raise ValueError("Invalid emoji format.")
                 
                 role = await commands.RoleConverter().convert(context, role_name)
-                emoji_role_pairs[str(emoji)] = role.id
+                emoji_role_pairs[emoji] = role.id
+                
                 await role_msg.add_reaction("✅")
-            except Exception:
-                await context.send("oh no! i couldn't process that. make sure to format it like `emoji: role name`. "
-                                    "don't forget the colon and make sure the role exists!")
+            except ValueError:
+                await context.send(
+                    "oh no! i couldn't process that. make sure to format it like "
+                    "`emoji: role name`. remember the colon and make sure the role exists!"
+                )
+            except commands.BadArgument:
+                await context.send("i couldn't find that role! double-check the name and try again.")
 
-        # Step 5: Confirm and post the message
         embed = discord.Embed(title=title, description=description, color=embed_color)
         if "{roles}" in description:
-            roles_description = "\n".join([f"{emoji}: {role}" for emoji, role in emoji_role_pairs.items()])
+            roles_description = "\n\n" + "\n".join(
+                [
+                    f"{emoji}: <@&{role_id}>"
+                    for emoji, role_id in emoji_role_pairs.items()
+                ]
+            )
             embed.description = description.replace("{roles}", roles_description)
-        else:
-            embed.description = description
 
-        confirmation_message = await context.send("here's what the message will look like! should i post it?", embed=embed)
+        confirmation_message = await context.send(
+            "almost done! here's what the message will look like, should i post it?",
+            embed=embed,
+        )
         await confirmation_message.add_reaction("✅")
         await confirmation_message.add_reaction("❌")
 
-        def check_reaction(reaction, user):
-            return user == context.author and str(reaction.emoji) in ["✅", "❌"]
-
         try:
-            reaction, _ = await self.bot.wait_for("reaction_add", timeout=60.0, check=check_reaction)
+            reaction, _ = await self.bot.wait_for(
+                "reaction_add", timeout=60.0, check=check_reaction
+            )
             if str(reaction.emoji) == "✅":
                 sent_message = await channel.send(embed=embed)
                 for emoji in emoji_role_pairs.keys():
                     await sent_message.add_reaction(emoji)
-                    
-                await self.update_reaction_roles(message_id=sent_message.id, emoji_role_mapping=emoji_role_pairs, 
-                                                 guild_id=context.guild.id)
 
-                await context.send(f"yay! i've posted the message and set up the reaction roles!\n"
-                                   f"here's the message ID in case you'd like to change anything later:\n"
-                                   f"`{sent_message.id}`")
-            else:
-                await context.send("okay! i won't post the message. let me know if you'd like to try again later.")
-        except asyncio.TimeoutError:
-                await context.send("are you still there? just call me if you'd like to try again later~")
-     
-     # Command: edit roles       
-    @commands.hybrid_command(name="editroles", description="Edit an existing reaction roles message.")
-    @app_commands.describe(message_id="The ID of the message you would like to edit.")
-    @commands.has_permissions(manage_roles=True)
-    async def edit_roles(self, context: Context, message_id, channel: discord.TextChannel):
-        """ Edit an existing reaction roles message """
-        # Step 1: Fetch the message
-        try:
-            message = await channel.fetch_message(message_id)
-            embed = message.embeds[0]
-        except Exception:
-            await context.send(
-                "i couldn't find that message! please make sure the ID and channel are correct.",
-                ephemeral=True
-            )
-            return
-
-        await context.send("what would you like to edit? reply with either `title`, `description`, `color`, `roles`."
-                           "you can keep editing until you're satisfied. just type `done` to let me know when you're finished!")
-
-        def check(m):
-            return m.author == context.author and m.channel == context.channel
-
-        while True:
-            reply = await self.bot.wait_for_message(context, check=check, timeout=300)
-            if reply.content.lower() == "done":
-                break
-
-            if reply.content.lower() == "title":
-                await context.send("what should the new title be?")
-                title_msg = await self.bot.wait_for_message(context, check=check)
-                embed.title = title_msg.content
-                await context.send("title updated!")
-
-            elif reply.content.lower() == "description":
-                await context.send("what should the new description be?")
-                description_msg = await self.bot.wait_for_message(context, check=check)
-                embed.description = description_msg.content
-                await context.send("description updated!")
-
-            elif reply.content.lower() == "color":
-                await context.send("what color should the embed be? (hex code like `#ffffff` or `none`)")
-                color_msg = await self.bot.wait_for_message(context, check=check)
-                if color_msg.content.lower() == "none":
-                    embed.color = discord.Color.default()
-                else:
-                    try:
-                        embed.color = discord.Color(int(color_msg.content.strip("#"), 16))
-                        await context.send("color updated!")
-                    except ValueError:
-                        await context.send("i'm sorry, that's not a valid hex color code.")
-
-            elif reply.content.lower() == "roles":
-                await context.send(
-                    "let's update the reaction roles!\n"
-                    "please enter them in this format: `emoji: role name`. type `done` when finished."
+                await self.update_reaction_roles(
+                    message_id=sent_message.id,
+                    emoji_role_mapping=emoji_role_pairs,
+                    guild_id=context.guild.id,
                 )
-                roles = {}
-                while True:
-                    role_msg = await self.bot.wait_for_message(context, check=check, timeout=300)
-                    if role_msg.content.lower() == "done":
-                        break
 
-                    try:
-                        emoji, role_name = role_msg.content.split(":")
-                        emoji = emoji.strip()
-                        role_name = role_name.strip()
-                        roles[emoji] = role_name
-                    except ValueError:
-                        await context.send("oh no! i couldn't process that. make sure to format it like `emoji: role name`. "
-                                        "don't forget the colon and make sure the role exists!")
-
-                if "{roles}" in embed.description:
-                    roles_description = "\n".join([f"{emoji}: {role}" for emoji, role in roles.items()])
-                    embed.description = embed.description.replace("{roles}", roles_description)
-                else:
-                    embed.description += f"\n\n{roles_description}"
-                await context.send("roles updated!")
-
-        # Step 3: Update the message
-        await message.edit(embed=embed)
-        await context.send("all done! i've updated the message for you.")
+                await context.send("yay! your reaction role message has been posted!")
+            else:
+                await context.send(
+                    "no problem! let me know if you'd like to try again later."
+                )
+        except asyncio.TimeoutError:
+            await context.send(
+                "are you still there? just call me if you'd like to try again later~"
+            )
 
 async def setup(bot):
     await bot.add_cog(ReactionRoles(bot))

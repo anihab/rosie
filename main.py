@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
+intents.emojis_and_stickers = True
 
 class Rosie(commands.Bot):
     def __init__(self) -> None:
