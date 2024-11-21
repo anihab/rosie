@@ -84,12 +84,16 @@ class Rosie(commands.Bot):
             logger.error("Error on startup: %s", e)
 
     async def shutdown(self) -> None:
+        await self.db.close()
+        await self.close()
+
         for task in asyncio.all_tasks():
             if task is not asyncio.current_task():
                 task.cancel()
-        await self.db.close()
-        await self.close()
                 
+        loop = asyncio.get_event_loop()
+        loop.stop()
+
     async def init_db(self) -> None:
         self.db = await aiosqlite.connect(self.db_path)
         schema_path = os.path.join(
@@ -124,7 +128,7 @@ class Rosie(commands.Bot):
         await self.process_commands(message)
         
     async def on_command_completion(self, context: Context) -> None:
-        self.logger.info("%s executed %s command", context.author, context.command.name)
+        self.logger.info("%s executed %s command", context.author, context.command.qualified_name)
         
     async def on_command_error(self, context, exception):
         embed = None

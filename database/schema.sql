@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS reaction_roles (
                     `message_id` BIGINT NOT NULL,
+                    `channel_id` BIGINT NOT NULL,
                     `emoji` TEXT NOT NULL,
                     `role_id` BIGINT NOT NULL,
                     `guild_id` BIGINT NOT NULL,
