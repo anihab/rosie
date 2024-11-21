@@ -12,3 +12,4 @@ logs/
 
 # Database
 *.db
+*.db-journal
