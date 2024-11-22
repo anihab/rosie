@@ -46,7 +46,7 @@ class ReactionRoles(commands.Cog):
                     """,
                     (message_id, channel_id, emoji, role_id, guild_id),
                 )
-            await self.bot.db.commit()  # Commit after the loop
+            await self.bot.db.commit()
         except Exception as e:
             self.bot.logger.error("Error when updating reaction roles: %s", e)
 

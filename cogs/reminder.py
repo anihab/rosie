@@ -107,10 +107,14 @@ class Reminder(commands.Cog):
                 reminders = await cursor.fetchall()
 
             for reminder in reminders:
-                reminder_id, time, interval, channel_id, role_id, user_id, message = reminder
-                time = parser.isoparse(time) # convert to datetime obj bc db stores as str
+                reminder_id, time, interval, channel_id, role_id, user_id, message = (
+                    reminder
+                )
+                time = parser.isoparse(
+                    time
+                )  # convert to datetime obj bc db stores as str
 
-                channel = self.bot.get_channel(channel_id) 
+                channel = self.bot.get_channel(channel_id)
                 user = await self.bot.fetch_user(user_id)
 
                 if channel:
