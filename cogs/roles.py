@@ -8,12 +8,12 @@ from discord.ext.commands import Context
 
 # matches unicode emojis or custom discord emojis (<:name:id> or <a:name:id>)
 EMOJI_REGEX = re.compile(
-    r"(<a?:\w+:\d{18}>|[\U0001F600-\U0001F64F]|[\U0001F300-\U0001F5FF]|"
+    r"<a?:\w+:\d{19}>|[\U0001F600-\U0001F64F]|[\U0001F300-\U0001F5FF]|"
     r"[\U0001F680-\U0001F6FF]|[\U0001F1E6-\U0001F1FF]|[\u2600-\u26FF]|"
-    r"[\U0001F900-\U0001F9FF]|[\U0001FA70-\U0001FAFF]|[\U0001F700-\U0001F77F])"
+    r"[\U0001F900-\U0001F9FF]|[\U0001FA70-\U0001FAFF]|[\U0001F700-\U0001F77F]"
 )
 # matches lines like "emoji: <@&role_id>"
-ROLES_FORMAT = re.compile(r"^.+?: <@&\d+>$")
+ROLES_FORMAT = re.compile(r"^.+? <@&\d+>$")
 
 
 class ReactionRoles(commands.Cog):
@@ -27,13 +27,16 @@ class ReactionRoles(commands.Cog):
         ) as cursor:
             return {row[0]: row[1] for row in await cursor.fetchall()}
 
-    async def update_reaction_roles(self, message_id, channel_id, emoji_role_pairs, guild_id):
+    async def update_reaction_roles(
+        self, message_id, channel_id, emoji_role_pairs, guild_id
+    ):
         """
         Updates reaction roles by upserting records for the given message_id.
         Existing mappings will be updated; new mappings will be added.
         """
         try:
             for emoji, role_id in emoji_role_pairs.items():
+                emoji = str(emoji)
                 await self.bot.db.execute(
                     """
                     INSERT INTO reaction_roles (message_id, channel_id, emoji, role_id, guild_id)
@@ -41,7 +44,7 @@ class ReactionRoles(commands.Cog):
                     ON CONFLICT(message_id, emoji)
                     DO UPDATE SET role_id = excluded.role_id, guild_id = excluded.guild_id
                     """,
-                    (message_id, emoji, role_id, guild_id),
+                    (message_id, channel_id, emoji, role_id, guild_id),
                 )
             await self.bot.db.commit()  # Commit after the loop
         except Exception as e:
@@ -89,35 +92,71 @@ class ReactionRoles(commands.Cog):
             return None
 
     @commands.Cog.listener()
-    async def on_reaction_add(self, reaction, user):
-        async with self.bot.db.execute(
-            "SELECT 1 FROM reaction_roles WHERE message_id = ? LIMIT 1",
-            (reaction.message.id,),
-        ) as cursor:
-            row = await cursor.fetchone()
+    async def on_raw_reaction_add(self, payload):
+        emoji = str(payload.emoji)
+        message_id = payload.message_id
 
-        if not row:
+        emoji_role_pairs = await self.fetch_reaction_roles(message_id)
+        if not emoji_role_pairs:
             return
 
-        role = await self.parse_reaction(reaction)
+        role_id = emoji_role_pairs.get(emoji)
+        if not role_id:
+            self.bot.logger.warning(
+                "No role found for emoji %s in message %s", emoji, message_id
+            )
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        if not guild:
+            self.bot.logger.warning("Guild not found for guild_id %s", payload.guild_id)
+            return
+
+        role = guild.get_role(role_id)
         if not role:
-            self.bot.logger.warning("Failed to parse reaction: %s", reaction)
+            self.bot.logger.warning(
+                "Role not found for role_id %s in guild %s", role, payload.guild_id
+            )
+            return
+
+        user = guild.get_member(payload.user_id)
+        if not user:
+            user = await guild.fetch_member(payload.user_id)
+
         await user.add_roles(role)
 
     @commands.Cog.listener()
-    async def on_reaction_remove(self, reaction, user):
-        async with self.bot.db.execute(
-            "SELECT 1 FROM reaction_roles WHERE message_id = ? LIMIT 1",
-            (reaction.message.id),
-        ) as cursor:
-            row = await cursor.fetchone()
+    async def on_raw_reaction_remove(self, payload):
+        emoji = str(payload.emoji)
+        message_id = payload.message_id
 
-        if not row:
+        emoji_role_pairs = await self.fetch_reaction_roles(message_id)
+        if not emoji_role_pairs:
             return
 
-        role = await self.parse_reaction(reaction)
+        role_id = emoji_role_pairs.get(emoji)
+        if not role_id:
+            self.bot.logger.warning(
+                "No role found for emoji %s in message %s", emoji, message_id
+            )
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        if not guild:
+            self.bot.logger.warning("Guild not found for guild_id %s", payload.guild_id)
+            return
+
+        role = guild.get_role(role_id)
         if not role:
-            self.bot.logger.warning("Failed to parse reaction: %s", reaction)
+            self.bot.logger.warning(
+                "Role not found for role_id %s in guild %s", role, payload.guild_id
+            )
+            return
+
+        user = guild.get_member(payload.user_id)
+        if not user:
+            user = await guild.fetch_member(payload.user_id)
+
         await user.remove_roles(role)
 
     # Command Group: /rr
@@ -127,7 +166,7 @@ class ReactionRoles(commands.Cog):
         """Main command for managing reaction roles (called /rr)"""
         await context.send(
             "Please use a subcommand to manage reaction roles. Try `/rr add` or `/rr edit`.",
-            ephemeral=True
+            ephemeral=True,
         )
 
     # Command: /rr add
@@ -167,9 +206,9 @@ class ReactionRoles(commands.Cog):
 
         await context.send(
             f"hello! so you'd like to set up a reaction role message in {channel.mention}?\n"
-            f"please list the emoji-role pairs for me in this format: `emoji: role-name`.\n"
+            f"please list the emoji-role pairs for me in this format: `emoji role_name`.\n"
             f"send pairs one by one and just type `done` when you're finished! for example: "
-            f"\n ```🌷: member\n🌸: admin\ndone```\n you can start whenever you're ready!"
+            f"\n ```🌷 member\n🌸 admin\ndone```\n you can start whenever you're ready!"
         )
 
         emoji_role_pairs = {}
@@ -181,7 +220,7 @@ class ReactionRoles(commands.Cog):
                 break
 
             try:
-                emoji, role_name = map(str.strip, role_message.content.split(":", 1))
+                emoji, role_name = map(str.strip, role_message.content.split(" ", 1))
 
                 if not EMOJI_REGEX.fullmatch(emoji):
                     raise ValueError("Invalid emoji format.")
@@ -190,11 +229,12 @@ class ReactionRoles(commands.Cog):
                 emoji_role_pairs[emoji] = role.id
 
                 await role_message.add_reaction("🥕")
-            except ValueError:
+            except ValueError as e:
                 await context.send(
                     "oh no! i couldn't process that. make sure to format it like "
-                    "`emoji: role name`, don't forget the colon!"
+                    "`emoji role_name`, don't forget the space!"
                 )
+                self.bot.logger.error("Could not parse emoji %s: %s", emoji, e)
             except commands.BadArgument:
                 await context.send(
                     "i couldn't find that role! double-check the name and try again."
@@ -204,7 +244,7 @@ class ReactionRoles(commands.Cog):
         if "{roles}" in description:
             roles_description = "\n\n" + "\n".join(
                 [
-                    f"{emoji}: <@&{role_id}>"
+                    f"{emoji} <@&{role_id}>"
                     for emoji, role_id in emoji_role_pairs.items()
                 ]
             )
@@ -280,9 +320,9 @@ class ReactionRoles(commands.Cog):
         embed = message.embeds[0]
 
         await context.send(
-            "got it! please provide the updated emoji-role pairs in the format `emoji: role-name`.\n"
+            "got it! please provide the updated emoji-role pairs in the format `emoji role_name`.\n"
             "send pairs one by one and just type `done` when you're finished! for example: "
-            "\n ```🌷: member\n🌸: admin\ndone```\n you can start whenever you're ready!"
+            "\n ```🌷 member\n🌸 admin\ndone```\n you can start whenever you're ready!"
         )
 
         def check_author(message):
@@ -299,7 +339,7 @@ class ReactionRoles(commands.Cog):
                 break
 
             try:
-                emoji, role_name = map(str.strip, role_message.content.split(":", 1))
+                emoji, role_name = map(str.strip, role_message.content.split(" ", 1))
                 role = await commands.RoleConverter().convert(context, role_name)
 
                 emoji_role_pairs[emoji] = role.id
@@ -328,7 +368,7 @@ class ReactionRoles(commands.Cog):
         ]
 
         new_roles_list = "\n".join(
-            [f"{emoji}: <@&{role_id}>" for emoji, role_id in emoji_role_pairs.items()]
+            [f"{emoji} <@&{role_id}>" for emoji, role_id in emoji_role_pairs.items()]
         )
         updated_lines.insert(1, new_roles_list)
 
