@@ -78,7 +78,7 @@ class ReactionRoles(commands.Cog):
 
         return role
 
-    async def wait_for_message(self, context, check, prompt=None, timeout=120):
+    async def wait_for_message(self, context, check, prompt=None, timeout=60):
         """Helper function to handle message waits with timeout."""
         if prompt:
             await context.send(prompt)
@@ -178,7 +178,7 @@ class ReactionRoles(commands.Cog):
         title="The message title.",
         description="The message description. Type {roles} to include the list of roles!",
         channel="The text channel to send the message in (e.g., #rules).",
-        color="The message color. Provide a hex code like `#ffffff`).",
+        color="The message color. Provide a hex code like `#ffffff`.",
     )
     async def add(
         self,
@@ -213,9 +213,7 @@ class ReactionRoles(commands.Cog):
 
         emoji_role_pairs = {}
         while True:
-            role_message = await self.wait_for_message(
-                context, check_author, timeout=300
-            )
+            role_message = await self.wait_for_message(context, check_author)
             if role_message.content.lower() == "done":
                 break
 
@@ -256,9 +254,7 @@ class ReactionRoles(commands.Cog):
             embed=embed,
         )
 
-        confirmation_message = await self.wait_for_message(
-            context, check_author, timeout=60
-        )
+        confirmation_message = await self.wait_for_message(context, check_author)
 
         if confirmation_message.content.lower() == "yes":
             await confirmation_message.add_reaction("🥕")
@@ -333,7 +329,7 @@ class ReactionRoles(commands.Cog):
         emoji_role_pairs = {}
         while True:
             role_message = await self.wait_for_message(
-                context, check_author, timeout=300
+                context, check_author, timeout=120
             )
             if role_message.content.lower() == "done":
                 break
