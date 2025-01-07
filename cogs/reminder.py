@@ -252,17 +252,13 @@ class Reminder(commands.Cog):
         timezone = timezone.strip().replace(" ", "_")
         if not gettz(timezone):
             await context.send(
-                "i couldn't find that timezone! please provide a valid timezone like `America/New York` or `UTC`.",
+                "i couldn't find that timezone!",
                 ephemeral=True,
             )
             return
 
         # parse the reminder time using the given timezone
-        settings = {
-            "TIMEZONE": timezone,
-            "TO_TIMEZONE": "UTC",
-            "RETURN_AS_TIMEZONE_AWARE": True,
-        }
+        settings = {"TIMEZONE": timezone, "TO_TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": True}
         parsed_time = dateparser.parse(time, settings=settings)
         if not parsed_time or parsed_time <= datetime.now(gettz("UTC")):
             await context.send(
