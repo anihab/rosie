@@ -11,74 +11,79 @@ class Event(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
-    async def fetch_event_message(self, context: Context, event_id: str):
-        """Fetch the event message from Discord."""
+    async def get_event_id(self, message_id, channel_id):
         async with self.bot.db.execute(
-            "SELECT channel_id FROM events WHERE id = ?", (event_id,)
+            "SELECT eventID FROM events WHERE message = ? AND channel = ?",
+            (message_id, channel_id),
         ) as cursor:
-            row = await cursor.fetchone()
-            if not row:
-                await context.send(
-                    "oh no! i couldn't find the original event message. please check and try again.",
-                    ephemeral=True,
-                )
-                return
-
-        channel = self.bot.get_channel(row[0])
-        if not channel:
-            await context.send(
-                "oh no! i couldn't find the event channel. please check and try again.",
-                ephemeral=True,
-            )
-            return
-
-        event_message = await channel.fetch_message(event_id)
-        if not event_message.embeds:
-            await context.send(
-                "The event message is missing or corrupted.", ephemeral=True
-            )
-            return
-
-    async def fetch_suggestions(bot, event_id):
-        async with bot.db.execute(
-            "SELECT time, emoji FROM suggestions WHERE event_id = ?", (event_id,)
-        ) as cursor:
-            return await cursor.fetchall()
-
-    async def create_event(self, event_message: discord.Message, time):
+             return (await cursor.fetchone())[0]
+        
+    async def get_event_message(self, event_id):
         async with self.bot.db.execute(
-            "SELECT channel_id, role_id FROM events WHERE message_id = ?",
-            (event_message.id,),
+            "SELECT message FROM events WHERE eventID = ?", (event_id,)
         ) as cursor:
-            event_data = await cursor.fetchone()
-
+             return (await cursor.fetchone())[0]
+        
+    async def validate_event_and_permissions(self, context, event_id):
+        async with self.bot.db.execute(
+            "SELECT eventID, message, channel, creator, role FROM events WHERE eventID = ?", (event_id,)
+        ) as cursor:
+             event_data = await cursor.fetchone()
+        
         if not event_data:
-            raise ValueError("Event not found in the database.")
+            await context.send("oh no! i couldn't find an event with that ID. try again?", ephemeral=True)
+            return None
 
-        channel_id, role_id = event_data
-        channel = self.bot.get_channel(channel_id)
-        if not channel:
-            raise ValueError("Channel not found.")
+        event_id, message_id, channel_id, creator_id, _ = event_data
+        if context.author.id != creator_id:
+            await context.send("only the event creator can finalize the event time!", ephemeral=True)
+            return None
 
-        event_message = await channel.fetch_message(event_message.id)
-        embed = event_message.embeds[0]
+        try:
+            channel = self.bot.get_channel(channel_id)
+            message = await channel.fetch_message(message_id)
+        except:
+            await context.send("the event message is missing or corrupted.", ephemeral=True)
+            return None
+
+        return event_data, channel, message
+
+    async def get_suggestions_and_votes(self, event_id, message):
+        async with self.bot.db.execute(
+            "SELECT time, emoji FROM suggestions WHERE eventID = ?", (event_id,)
+        ) as cursor:
+            suggestions = await cursor.fetchall()
+        
+        if not suggestions:
+            return None, None
+
+        vote_counts = {}
+        for reaction in message.reactions:
+            for suggestion in suggestions:
+                if suggestion[1] == reaction.emoji:
+                    vote_counts[suggestion[0]] = reaction.count - 1  # subtract bot's reaction
+
+        return suggestions, vote_counts
+        
+    async def create_event(self, eventID, message, channel, time, role_id = None):
+        embed = message.embeds[0]
         embed.description += (
-            f"\n\n**chosen time:** <t:{int(time.timestamp())}:F>"
-            f"\nvotes will no longer be counted!"
+            f"\n\n**chosen time:** <t:{int(time.timestamp())}:F>\nvoting is now closed!"
         )
-        await event_message.edit(embed=embed)
+        await message.edit(embed=embed)
 
         # notify the guild
         role_mention = f"<@&{role_id}> " if role_id else ""
-        notif_message = (
+        notification = (
             f"{role_mention}🌟 *our event has been finalized!*\n"
             f"we'll be meeting at <t:{int(time.timestamp())}:F>.\n"
             f"hope to see you there!"
         )
-        await channel.send(notif_message)
+        await channel.send(notification)
 
+        # clean up DB
         await self.bot.db.execute(
-            "DELETE FROM events WHERE message_id = ?", (event_message.id,)
+            "DELETE FROM events WHERE eventID = ?", (eventID,)
         )
         await self.bot.db.commit()
 
@@ -86,18 +91,19 @@ class Event(commands.Cog):
     @commands.hybrid_group(name="event", description="Manage events.")
     async def event(self, context: Context):
         await context.send(
-            "Please use a subcommand to manage events. Try `/event plan` or `/event list`.",
+            "Use a subcommand to manage events. Try `/event plan` or `/event list`.",
             ephemeral=True,
         )
+        return
 
     # Command: /event plan
-    @event.command(name="plan", describe="Send out a message to plan a group event.")
+    @event.command(name="plan", describe="Send a message to plan an event with friends!")
     @commands.has_permissions(manage_events=True)
     @app_commands.describe(
-        activity="The activity you'd like to do. (e.g., a group study session) ",
-        channel="The channel you'd like to send this message in.",
-        role="A role to ping.",
-        color="A hex-code color for the embed. (e.g., #ffffff)",
+        activity="The activity to plan. (e.g., a group study session) ",
+        channel="The channel to send the message in.",
+        role="Role to ping.",
+        color="Embed color (hex code, e.g. #ffffff)",
     )
     async def plan(
         self,
@@ -105,10 +111,8 @@ class Event(commands.Cog):
         activity: str,
         channel: discord.TextChannel,
         role: discord.Role = None,
-        color: str = None,
+        color: str = discord.Color.default(),
     ):
-        """Start planning a group event with friends!"""
-        embed_color = discord.Color.default()
         if color:
             try:
                 embed_color = discord.Color(int(color.lstrip("#"), 16))
@@ -117,51 +121,45 @@ class Event(commands.Cog):
                     "sorry but that doesn't look like a valid hex code! try again?",
                     ephemeral=True,
                 )
+                return
 
         role_mention = f"<@&{role.id}>\n" if role else ""
         description = (
             f"{role_mention}"
             f"🌸 *let's plan an event!*\n"
-            f"we're thinking about **{activity}**.\n"
-            f"suggest a time using `/event suggest`, or vote for someone else's idea by reacting with the corresponding emoji!\n\n"
-            f"`this message will be updated with suggestions as they are added.`"
+            f"**{activity}**.\n"
+            f"suggest a time using `/event suggest`, or vote for an existing suggestion with reactions!\n\n"
+            f"`this message will be updated with suggestions as they are added.\n`"
         )
         embed = discord.Embed(description=description, color=embed_color)
         message = await channel.send(embed=embed)
 
         await self.bot.db.execute(
             """
-                INSERT INTO events (message_id, channel_id, creator_id, role_id, activity)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-            (
-                message.id,
-                channel.id,
-                context.author.id,
-                role.id if role else None,
-                activity,
-            ),
+            INSERT INTO events (message, channel, creator, role_mention)
+            VALUES (?, ?, ?, ?)
+            """,
+            (message.id, channel.id, context.author.id, role.id if role else None)
         )
         await self.bot.db.commit()
-        
-        embed.description += f"\n**event id:** `{message.id}`\n\n"
+
+        event_id = await self.get_event_id(message.id, channel.id)
+
+        embed.description += f"**event id:** `{event_id}`\n\n"
         await message.edit(embed=embed)
 
         await context.send(
-            f"your event has been created! others can suggest times using `/event suggest {message.id}`!\n"
+            f"your event has been created! others can suggest times using `/event suggest {event_id}`!\n"
             f"you can use `/event tally` when you're ready to finalize the event!",
             ephemeral=True,
         )
 
     # Command: /event suggest
-    @event.command(
-        name="suggest",
-        description="Suggest a time for an event and an emoji for others to vote with.",
-    )
+    @event.command(name="suggest", description="Suggest a time for an event.")
     @app_commands.describe(
-        event_id="The event message ID.",
-        time="The time you would like to propose (e.g., 'Friday at 8pm')",
-        timezone="A timezone (e.g., 'America/New York' or 'UTC'). Don't worry, I won't save this!",
+        event_id="The event ID.",
+        time="The time to suggest (e.g., 'Friday at 8pm')",
+        timezone="A timezone (e.g., 'UTC'). Don't worry, I won't save this!",
         emoji="An emoji for others to vote on your suggestion.",
     )
     async def suggest(
@@ -172,9 +170,6 @@ class Event(commands.Cog):
         timezone: str,
         emoji: str,
     ):
-        """Suggest a time for an event."""
-        
-
         timezone = timezone.strip().replace(" ", "_")
         if not gettz(timezone):
             await context.send(
@@ -204,19 +199,21 @@ class Event(commands.Cog):
         try:
             await self.bot.db.execute(
                 """
-                INSERT INTO suggestions (event_id, user_id, time, emoji)
+                INSERT INTO suggestions (eventID, suggestionID, time, emoji)
                 VALUES (?, ?, ?, ?)
                 """,
-                (event_id, context.author.id, parsed_time.isoformat(), emoji),
+                (event_id, parsed_time.isoformat(), emoji)
             )
             await self.bot.db.commit()
 
-            embed = event_message.embeds[0]
+            message = await self.get_event_message(event_id)
+            
+            embed = message.embeds[0]
             embed.description += (
                 f"{emoji} <t:{unix_timestamp}> (suggested by {context.author.mention})"
             )
-            await event_message.edit(embed=embed)
-            await event_message.add_reaction(emoji)
+            await message.edit(embed=embed)
+            await message.add_reaction(emoji)
 
             await context.send(
                 f"yay! your suggestion was added to the event message.",
@@ -230,78 +227,19 @@ class Event(commands.Cog):
             return
 
     # Command: /event tally
-    @event.command(
-        name="tally",
-        description="Finalize the time for an event based on vote results.",
-    )
-    @app_commands.describe(event_id="The event message ID.")
+    @event.command(name="tally", description="Finalize event time by vote results.")
+    @app_commands.describe(event_id="The event ID.")
     @commands.has_permissions(manage_events=True)
     async def tally(self, context: Context, event_id: str):
-        """Finalize the time for an event based on vote results."""
-        async with self.bot.db.execute(
-            """
-            SELECT channel_id, creator_id
-            FROM events
-            WHERE message_id = ?
-            """,
-            (event_id,),
-        ) as cursor:
-            event_data = await cursor.fetchone()
-
+        event_data = await self.validate_event_and_permissions(context, event_id)
         if not event_data:
-            await context.send(
-                "oh no! i couldn't find an event with that ID. please double-check and try again.",
-                ephemeral=True,
-            )
             return
 
-        channel_id, creator_id = event_data
-        channel = self.bot.get_channel(channel_id)
-        if not channel:
-            await context.send(
-                "i couldn't find the event's channel. please check the event setup.",
-                ephemeral=True,
-            )
-            return
-
-        event_message = await channel.fetch_message(event_id)
-        if not event_message.embeds:
-            await context.send(
-                "The event message is missing or corrupted.", ephemeral=True
-            )
-            return
-
-        # tally votes for each suggestion
-        async with self.bot.db.execute(
-            """
-            SELECT time, emoji
-            FROM suggestions
-            WHERE event_id = ?
-            """,
-            (event_id,),
-        ) as cursor:
-            suggestions = await cursor.fetchall()
-
-        if not suggestions:
-            await context.send(
-                "it looks like no one voted on the suggestions yet. try again later!",
-                ephemeral=True,
-            )
-            return
-
-        vote_counts = {}
-        for reaction in event_message.reactions:
-            for suggestion in suggestions:
-                if suggestion[1] == reaction.emoji:
-                    vote_counts[suggestion[0]] = (
-                        reaction.count - 1
-                    )  # subtract 1 for bot's reaction
+        _, channel, message = event_data
+        _, vote_counts = await self.get_suggestions_and_votes(event_id, message)
 
         if not vote_counts:
-            await context.send(
-                "it looks like no one voted on the suggestions yet. try again later!",
-                ephemeral=True,
-            )
+            await context.send("it looks like no one voted on the suggestions yet. try again later!", ephemeral=True)
             return
 
         # find the time(s) with the most votes
@@ -312,155 +250,78 @@ class Event(commands.Cog):
 
         if len(top_suggestions) > 1:
             # notify the event creator in case of a tie
-            creator_id = self.active_events[event_id]["creator"]
             ties = "\n".join(
                 f"<t:{int(time.timestamp())}> ({max_votes} votes)"
                 for time in top_suggestions
             )
             await context.send(
                 f"there's a tie between these times:\n{ties}\n"
-                f"<@{creator_id}>, please decide which time to finalize by using `/event choose`.",
+                f"<@{context.author.id}>, please decide which time to finalize by using `/event choose`.",
                 ephemeral=True,
             )
             return
 
         # if no tie, finalize the event with the winning time (most votes)
-        await self.create_event(channel, event_message, top_suggestions[0])
+        await self.create_event(event_id, message, channel, top_suggestions[0], event_data[4])
         return
 
     # Command: /event choose
     @event.command(
         name="choose",
-        description="Finalize the time for the event as the creator.",
+        description="Choose a suggested event time as the creator.",
     )
     @app_commands.describe(
-        event_id="The ID of the event message.",
-        emoji="The emoji corresponding to the time you'd like to choose.",
+        event_id="The event ID.",
+        emoji="The emoji corresponding to the chosen time.",
     )
     @commands.has_permissions(manage_events=True)
     async def choose(self, context: Context, event_id: str, emoji: str):
-        """Finalize the event time using an emoji."""
-        async with self.bot.db.execute(
-            """
-            SELECT channel_id, creator_id
-            FROM events
-            WHERE message_id = ?
-            """,
-            (event_id,),
-        ) as cursor:
-            event_data = await cursor.fetchone()
-
+        event_data = await self.validate_event_and_permissions(context, event_id)
         if not event_data:
-            await context.send(
-                "oh no! i couldn't find an event with that ID. please double-check and try again.",
-                ephemeral=True,
-            )
             return
 
-        channel_id, creator_id = event_data
-        if context.author.id != creator_id:
-            await context.send(
-                "only the event creator can choose the final time!",
-                ephemeral=True,
-            )
-            return
-
-        channel = self.bot.get_channel(channel_id)
-        if not channel:
-            await context.send(
-                "i couldn't find the event's channel. please check the event setup.",
-                ephemeral=True,
-            )
-            return
-
-        event_message = await channel.fetch_message(event_id)
-        if not event_message.embeds:
-            await context.send(
-                "The event message is missing or corrupted.", ephemeral=True
-            )
-            return
-
-        # validate the given emoji
+        _, channel, message = event_data
         async with self.bot.db.execute(
-            """
-            SELECT time
-            FROM suggestions
-            WHERE event_id = ? AND emoji = ?
-            """,
-            (event_id, emoji),
+            "SELECT time FROM suggestions WHERE eventID = ? AND emoji = ?", (event_id, emoji)
         ) as cursor:
-            chosen_time = await cursor.fetchone()
+            row = await cursor.fetchone()
 
-        if not chosen_time:
-            await context.send(
-                "i couldn't find that emoji among the suggestions. please double-check and try again!",
-                ephemeral=True,
-            )
+        if not row:
+            await context.send("i couldn't find that emoji among the suggestions. try again?", ephemeral=True)
             return
 
-        # finalize the time
-        await self.create_event(event_message, chosen_time[0])
+        chosen_time = row[0]
+        await self.create_event(event_id, message, channel, chosen_time, event_data[4])
         return
 
     # Command: /event list
     @event.command(
         name="list",
-        description="List all active event plans and their suggested times.",
+        description="List all of your active events.",
     )
     @commands.has_permissions(manage_events=True)
     async def list(self, context: Context):
-        """List all active events."""
         async with self.bot.db.execute(
-            """
-            SELECT e.message_id, e.channel_id, e.creator_id, s.time, s.emoji
-            FROM events e
-            LEFT JOIN suggestions s ON e.message_id = s.event_id
-            """
+            "SELECT eventID, creator, activity FROM events WHERE creator = ?",
+            (context.author.id,)
         ) as cursor:
-            results = await cursor.fetchall()
+            events = await cursor.fetchall()
 
-        if not results:
-            await context.send(
-                "you're not planning an events right now! why not start one with `/event plan`?",
-                ephemeral=True,
-            )
+        if not events:
+            await context.send("you aren't planning any events right now.", ephemeral=True)
             return
 
-        # group results by event
-        events = {}
-        for message_id, channel_id, creator_id, time, emoji in results:
-            if message_id not in events:
-                events[message_id] = {
-                    "channel_id": channel_id,
-                    "creator_id": creator_id,
-                    "suggestions": [],
-                }
-            if time or emoji:  # Add suggestions only if they exist
-                events[message_id]["suggestions"].append((time, emoji))
+        event_list = []
+        for event_id, activity in events:
+            event_list.append(
+                f"**{activity}**\n- ID: `{event_id}`\n"
+            )
 
-        # build response
-        response = ""
-        for message_id, event_data in events.items():
-            channel = self.bot.get_channel(event_data["channel_id"])
-            if not channel:
-                continue
-
-            event_message_link = f"https://discord.com/channels/{context.guild.id}/{event_data['channel_id']}/{message_id}"
-            response += f"**Event ID:** `{message_id}`\n"
-            response += f"**Channel:** <#{event_data['channel_id']}>\n"
-            response += f"**Creator:** <@{event_data['creator_id']}>\n"
-            response += f"**Event Message:** [Click here]({event_message_link})\n"
-            response += "**Suggestions:**\n"
-
-            if not event_data["suggestions"]:
-                response += "- No suggestions yet.\n"
-            else:
-                for time, emoji in event_data["suggestions"]:
-                    time_text = f"<t:{int(time.timestamp())}:F>"
-                    response += f"- {emoji} {time_text}\n"
-
-            response += "\n"
-
+        formatted_list = "\n\n".join(event_list)
+        await context.send(
+            f"your active event plans:\n\n{formatted_list}",
+            ephemeral=True
+        )
 
 async def setup(bot) -> None:
     await bot.add_cog(Event(bot))

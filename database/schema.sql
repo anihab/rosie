@@ -19,18 +19,20 @@ CREATE TABLE IF NOT EXISTS reminders (
                 );
 
 CREATE TABLE IF NOT EXISTS events (
-                    message_id BIGINT PRIMARY KEY NOT NULL,
-                    channel_id BIGINT NOT NULL,
-                    creator_id BIGINT NOT NULL,
-                    role_id BIGINT NOT NULL,
+                    eventID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    creator TEXT NOT NULL,
+                    role TEXT,
                     activity TEXT NOT NULL,
                 );
 
 CREATE TABLE IF NOT EXISTS suggestions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id INT REFERENCES events(message_id),
-                    user_id BIGINT NOT NULL,
+                    eventID INTEGER NOT NULL,
+                    suggestionID INTEGER AUTOINCREMENT,
                     time TEXT NOT NULL,
                     emoji TEXT NOT NULL,
-                    votes INT DEFAULT 0
+                    votes INTEGER DEFAULT 0,
+                    PRIMARY KEY (eventID, suggestionID),
+                    FOREIGN KEY (eventID) REFERENCES events (eventID) ON DELETE CASCADE
                 );
