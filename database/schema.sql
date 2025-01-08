@@ -8,31 +8,29 @@ CREATE TABLE IF NOT EXISTS reaction_roles (
                 );
 
 CREATE TABLE IF NOT EXISTS reminders ( 
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reminder_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
                     time TEXT NOT NULL,
                     interval TEXT,
-                    channel_id INTEGER,
-                    role_id INTEGER,
-                    user_id INTEGER,
+                    channel_id BIGINT,
+                    role_id BIGINT,
+                    user_id BIGINT,
                     message TEXT
                 );
 
 CREATE TABLE IF NOT EXISTS events (
-                    eventID INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message TEXT NOT NULL,
-                    channel TEXT NOT NULL,
-                    creator TEXT NOT NULL,
-                    role TEXT,
-                    activity TEXT NOT NULL,
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id BIGINT NOT NULL,
+                    channel_id BIGINT NOT NULL,
+                    creator_id BIGINT NOT NULL,
+                    role_id BIGINT,
+                    activity TEXT NOT NULL
                 );
 
 CREATE TABLE IF NOT EXISTS suggestions (
-                    eventID INTEGER NOT NULL,
-                    suggestionID INTEGER AUTOINCREMENT,
+                    event_id INTEGER NOT NULL,
                     time TEXT NOT NULL,
                     emoji TEXT NOT NULL,
-                    votes INTEGER DEFAULT 0,
-                    PRIMARY KEY (eventID, suggestionID),
-                    FOREIGN KEY (eventID) REFERENCES events (eventID) ON DELETE CASCADE
+                    PRIMARY KEY (event_id, emoji),
+                    FOREIGN KEY (event_id) REFERENCES events (event_id) ON DELETE CASCADE
                 );

@@ -51,7 +51,7 @@ class Reminder(commands.Cog):
             now = datetime.now(gettz("UTC"))
             async with self.bot.db.execute(
                 """
-                SELECT id, interval, channel_id, role_id, user_id, message
+                SELECT reminder_id, interval, channel_id, role_id, user_id, message
                 FROM reminders
                 WHERE time <= ?
                 """,
@@ -65,7 +65,7 @@ class Reminder(commands.Cog):
             # calculate the next reminder for the next time check
             async with self.bot.db.execute(
                 """
-                SELECT id, time
+                SELECT reminder_id, time
                 FROM reminders
                 WHERE time > ? ORDER BY time ASC LIMIT 1
                 """,
@@ -101,7 +101,7 @@ class Reminder(commands.Cog):
         try:
             now = datetime.now(gettz("UTC"))
             async with self.bot.db.execute(
-                "SELECT id, time, interval, channel_id, role_id, user_id, message FROM reminders WHERE time <= ?",
+                "SELECT reminder_id, time, interval, channel_id, role_id, user_id, message FROM reminders WHERE time <= ?",
                 (now.isoformat(),),
             ) as cursor:
                 reminders = await cursor.fetchall()
@@ -127,12 +127,12 @@ class Reminder(commands.Cog):
                 if interval:
                     next_time = await self.calculate_next_time(time, interval)
                     await self.bot.db.execute(
-                        "UPDATE reminders SET time = ? WHERE id = ?",
+                        "UPDATE reminders SET time = ? WHERE reminder_id = ?",
                         (next_time.isoformat(), reminder_id),
                     )
                 else:
                     await self.bot.db.execute(
-                        "DELETE FROM reminders WHERE id = ?", (reminder_id,)
+                        "DELETE FROM reminders WHERE reminder_id = ?", (reminder_id,)
                     )
                 self.bot.logger.info("Processed reminder ID: %s", reminder_id)
         except aiosqlite.Error as e:
@@ -258,7 +258,11 @@ class Reminder(commands.Cog):
             return
 
         # parse the reminder time using the given timezone
-        settings = {"TIMEZONE": timezone, "TO_TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": True}
+        settings = {
+            "TIMEZONE": timezone,
+            "TO_TIMEZONE": "UTC",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+        }
         parsed_time = dateparser.parse(time, settings=settings)
         if not parsed_time or parsed_time <= datetime.now(gettz("UTC")):
             await context.send(
@@ -326,7 +330,7 @@ class Reminder(commands.Cog):
         try:
             async with self.bot.db.execute(
                 """
-                SELECT id, title, time, interval, channel_id
+                SELECT reminder_id, title, time, interval, channel_id
                 FROM reminders 
                 WHERE user_id = ? ORDER BY time ASC
                 """,
@@ -368,7 +372,7 @@ class Reminder(commands.Cog):
         try:
             # check if the reminder exists and belongs to the user
             async with self.bot.db.execute(
-                "SELECT id FROM reminders WHERE id = ? AND user_id = ?",
+                "SELECT reminder_id FROM reminders WHERE reminder_id = ? AND user_id = ?",
                 (reminder_id, context.author.id),
             ) as cursor:
                 reminder = await cursor.fetchone()
@@ -382,7 +386,7 @@ class Reminder(commands.Cog):
 
             # delete the reminder
             await self.bot.db.execute(
-                "DELETE FROM reminders WHERE id = ?", (reminder_id,)
+                "DELETE FROM reminders WHERE reminder_id = ?", (reminder_id,)
             )
             await self.bot.db.commit()
 
