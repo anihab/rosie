@@ -223,12 +223,12 @@ class Reminder(commands.Cog):
     # Command: /reminder new
     @reminder.command(name="new", description="Create a new reminder!")
     @app_commands.describe(
-        title="The title for the reminder",
-        time="The time for the reminder. If it is for today, please say so!(e.g., 'Today at 10:30am' or 'next Monday 8pm')",
-        timezone="Add a timezone so I can convert for you! Don't worry, I won't save this information. (e.g., 'America/New_York' or 'UTC')",
-        interval="How often I should remind you. If left empty, I'll only remind you once!  (e.g., 'daily', 'every 2 weeks')",
-        channel="The channel to send the reminder in. If left empty, I'll send you a DM!",
-        role="I'll make sure to mention this role. (e.g., '@moderators')",
+        title="Reminder title",
+        time="Reminder time (e.g., 'Today at 10:30am' or 'next Monday 8pm')",
+        timezone="A timezone! Don't worry, I won't save this! (e.g., 'America/Los Angeles' or 'UTC')",
+        interval="Repeat interval for recurring reminders. (e.g., 'daily', 'every 2 weeks')",
+        channel="Reminder channel. Otherwise, I'll send a DM!",
+        role="A role to mention. (e.g., '@moderators')",
         message="Any custom message you'd like for the reminder.",
     )
     async def new(
@@ -288,7 +288,7 @@ class Reminder(commands.Cog):
         try:
             message = (
                 f"hey, just checking in! you have a reminder **{title}** at this time.\n"
-                f"let me know if you completed this task!"
+                #f"let me know if you completed this task!"
                 if not message
                 else message
             )
@@ -366,7 +366,7 @@ class Reminder(commands.Cog):
     # Command: /reminder cancel
     @reminder.command(name="cancel", help="Cancel an active reminder!")
     @app_commands.describe(
-        reminder_id="The ID of the reminder you want to cancel. Call /list to find the ID!"
+        reminder_id="The reminder ID. Use /list to find the ID!"
     )
     async def cancel(self, context: Context, reminder_id: int):
         try:
