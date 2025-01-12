@@ -84,8 +84,10 @@ class Rosie(commands.Bot):
             logger.error("Error on startup: %s", e)
 
     async def shutdown(self) -> None:
-        await self.db.close()
-        await self.close()
+        self.logger.info("Shutting down...")
+        
+        if self.db:
+            await self.db.close()
 
         for task in asyncio.all_tasks():
             if task is not asyncio.current_task():
@@ -93,6 +95,7 @@ class Rosie(commands.Bot):
                 
         loop = asyncio.get_event_loop()
         loop.stop()
+        await self.close()
 
     async def init_db(self) -> None:
         self.db = await aiosqlite.connect(self.db_path)

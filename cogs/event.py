@@ -142,7 +142,7 @@ class Event(commands.Cog):
             f"{role_mention}"
             f"🌸 *let's plan an event!*\n"
             f"**{activity}**.\n"
-            f"suggest a time using `/event suggest`, or vote for an existing suggestion with reactions!\n\n"
+            f"suggest a time using `/event suggest` or react to vote!\n\n"
             f"`this message will be updated with suggestions as they are added.\n`"
         )
         embed = discord.Embed(description=description, color=embed_color)
@@ -165,7 +165,7 @@ class Event(commands.Cog):
 
         event_id = await self.get_event_id(message.id, channel.id)
 
-        embed.description += f"**event id:** `{event_id}`\n\n"
+        embed.description += f"**event id:** `{event_id}`\n \n"
         await message.edit(embed=embed)
 
         await context.send(
@@ -178,7 +178,7 @@ class Event(commands.Cog):
     @event.command(name="suggest", description="Suggest a time for an event.")
     @app_commands.describe(
         event_id="The event ID.",
-        time="The time to suggest (e.g., 'Friday at 8pm')",
+        time="The time to suggest (e.g., 'Friday at 8pm' or 'Dec 25 at 10am')",
         timezone="A timezone (e.g., 'America/Los Angeles' or 'UTC'). Don't worry, I won't save this!",
         emoji="An emoji for others to vote on your suggestion.",
     )
@@ -244,7 +244,7 @@ class Event(commands.Cog):
 
             embed = message.embeds[0]
             embed.description += (
-                f"{emoji} <t:{unix_timestamp}> (suggested by {context.author.mention})"
+                f"\n{emoji} <t:{unix_timestamp}> (suggested by {context.author.mention})"
             )
             await message.edit(embed=embed)
             await message.add_reaction(emoji)
@@ -259,6 +259,55 @@ class Event(commands.Cog):
                 ephemeral=True,
             )
             return
+        
+    # Command: /event remove
+    @event.command(name="remove", description="Remove a suggestion from an event.")
+    @app_commands.describe(
+        event_id="The event ID.",
+        emoji="The emoji corresponding to the suggestion to remove.",
+    )
+    async def remove(self, context: Context, event_id: str, emoji: str):
+        # validate the event and the user's permissions
+        all_data = await self.validate_event_and_permissions(context, event_id)
+        if not all_data:
+            return
+
+        event_data, channel, message = all_data
+
+        # check if the suggestion exists
+        async with self.bot.db.execute(
+            "SELECT time FROM suggestions WHERE event_id = ? AND emoji = ?",
+            (event_id, emoji),
+        ) as cursor:
+            suggestion = await cursor.fetchone()
+
+        if not suggestion:
+            await context.send(
+                "i couldn't find a suggestion with that emoji for this event. try again?",
+                ephemeral=True,
+            )
+            return
+
+        # remove the suggestion from the database
+        await self.bot.db.execute(
+            "DELETE FROM suggestions WHERE event_id = ? AND emoji = ?",
+            (event_id, emoji),
+        )
+        await self.bot.db.commit()
+
+        # update the message by removing the suggestion
+        embed = message.embeds[0]
+        suggestion_text = f"{emoji} <t:{int(dateparser.parse(suggestion[0]).timestamp())}>"
+        updated_description = "\n".join(
+            line for line in embed.description.split("\n") if suggestion_text not in line
+        )
+        embed.description = updated_description
+        await message.edit(embed=embed)
+
+        await context.send(
+            f"the suggestion with emoji `{emoji}` has been removed from the event!",
+            ephemeral=True,
+        )
 
     # Command: /event tally
     @event.command(name="tally", description="Finalize event time by vote results.")
@@ -341,7 +390,7 @@ class Event(commands.Cog):
     @commands.has_permissions(manage_events=True)
     async def list(self, context: Context):
         async with self.bot.db.execute(
-            "SELECT event_id, creator_id, activity FROM events WHERE creator = ?",
+            "SELECT event_id, creator_id, activity FROM events WHERE creator_id = ?",
             (context.author.id,),
         ) as cursor:
             events = await cursor.fetchall()
