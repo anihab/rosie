@@ -95,6 +95,8 @@ class Rosie(commands.Bot):
                 
         loop = asyncio.get_event_loop()
         loop.stop()
+
+        await self.unload_cogs()
         await self.close()
 
     async def init_db(self) -> None:
@@ -116,6 +118,17 @@ class Rosie(commands.Bot):
                     logger.info("Loaded the %s cog", cog)
                 except Exception as e:
                     logger.error("Error loading the %s cog: %s", cog, e)
+
+    async def unload_cogs(self) -> None:
+        cogs_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "cogs")
+        for file in os.listdir(cogs_dir):
+            if file.endswith(".py"):
+                cog = file[:-3]
+                try:
+                    await self.unload_extension(f"cogs.{cog}")
+                    logger.info("Unloaded the %s cog", cog)
+                except Exception as e:
+                    logger.error("Error unloading the %s cog: %s", cog, e)
                     
     @tasks.loop(minutes=1.0)
     async def set_status(self) -> None:
