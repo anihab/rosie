@@ -74,16 +74,16 @@ class Event(commands.Cog):
                 if suggestion[1] == reaction.emoji:
                     vote_counts[suggestion[0]] = (
                         reaction.count - 1
-                    )  # subtract bot's reaction
+                    )  # subtract the bots reaction
 
         return vote_counts
 
     async def create_event(self, event_id, message, channel, time, role_id=None):
-        parsed_time = dateparser.parse(time, settings = {"RETURN_AS_TIMEZONE_AWARE": True})
-        embed = message.embeds[0]
-        embed.description += (
-            f"\n\n**chosen time:** <t:{int(parsed_time.timestamp())}:F>\nvoting is now closed!"
+        parsed_time = dateparser.parse(
+            time, settings={"RETURN_AS_TIMEZONE_AWARE": True}
         )
+        embed = message.embeds[0]
+        embed.description += f"\n\n**chosen time:** <t:{int(parsed_time.timestamp())}:F>\nvoting is now closed!"
         await message.edit(embed=embed)
 
         # notify the guild
@@ -114,7 +114,7 @@ class Event(commands.Cog):
     )
     @commands.has_permissions(manage_events=True)
     @app_commands.describe(
-        activity="The activity to plan. (e.g., a group study session) ",
+        activity="The event activity. (e.g., a group study session) ",
         channel="The channel to send the message in.",
         role="Role to ping.",
         color="Embed color (hex code, e.g. #ffffff)",
@@ -138,13 +138,7 @@ class Event(commands.Cog):
                 return
 
         role_mention = f"<@&{role.id}>\n" if role else ""
-        description = (
-            f"{role_mention}"
-            f"🌸 *let's plan an event!*\n"
-            f"**{activity}**.\n"
-            f"suggest a time using `/event suggest` or react to vote!\n\n"
-            f"`this message will be updated with suggestions as they are added.\n`"
-        )
+        description = f"{role_mention}" f"🌸 *let's plan an event!*\n**{activity}**."
         embed = discord.Embed(description=description, color=embed_color)
         message = await channel.send(embed=embed)
 
@@ -165,12 +159,16 @@ class Event(commands.Cog):
 
         event_id = await self.get_event_id(message.id, channel.id)
 
-        embed.description += f"**event id:** `{event_id}`\n \n"
+        embed.description += (
+            f"\propose times with `/event suggest {event_id}` or react to vote!\n\n"
+            f"this message will be updated with proposed times as they are added.\n"
+            f"**event id:** `{event_id}`"
+        )
         await message.edit(embed=embed)
 
         await context.send(
-            f"your event has been created! others can suggest times using `/event suggest {event_id}`!\n"
-            f"you can use `/event tally` when you're ready to finalize the event!",
+            f"your event is ready to go 🎉 others can propose times using `/event suggest {event_id}`."
+            f"\nwhen you're ready to decide, use `/event tally`!",
             ephemeral=True,
         )
 
@@ -178,8 +176,8 @@ class Event(commands.Cog):
     @event.command(name="suggest", description="Suggest a time for an event.")
     @app_commands.describe(
         event_id="The event ID.",
-        time="The time to suggest (e.g., 'Friday at 8pm' or 'Dec 25 at 10am')",
-        timezone="A timezone (e.g., 'America/Los Angeles' or 'UTC'). Don't worry, I won't save this!",
+        time="Your proposed time (e.g., 'Friday at 8pm' or 'Dec 25 at 10am')",
+        timezone="A timezone (e.g., 'US/Pacific' or 'UTC'). Don't worry, I won't save this!",
         emoji="An emoji for others to vote on your suggestion.",
     )
     async def suggest(
@@ -243,14 +241,13 @@ class Event(commands.Cog):
             message = await self.get_event_message(event_id)
 
             embed = message.embeds[0]
-            embed.description += (
-                f"\n{emoji} <t:{unix_timestamp}> (suggested by {context.author.mention})"
-            )
+            embed.description += f"\n{emoji} <t:{unix_timestamp}> (suggested by {context.author.mention})"
             await message.edit(embed=embed)
             await message.add_reaction(emoji)
 
             await context.send(
-                f"yay! your suggestion was added to the event message.",
+                f"your time suggestion has been added! don't forget to vote by reacting to the event message,"
+                f"and let me know if you want to make any changes with `/event cancel-suggestion`.",
                 ephemeral=True,
             )
         except discord.HTTPException:
@@ -259,14 +256,16 @@ class Event(commands.Cog):
                 ephemeral=True,
             )
             return
-        
-    # Command: /event remove
-    @event.command(name="remove", description="Remove a suggestion from an event.")
+
+    # Command: /event cancel-suggestion
+    @event.command(
+        name="cancel-suggestion", description="Remove a suggested time from an event."
+    )
     @app_commands.describe(
         event_id="The event ID.",
         emoji="The emoji corresponding to the suggestion to remove.",
     )
-    async def remove(self, context: Context, event_id: str, emoji: str):
+    async def cancel_suggestion(self, context: Context, event_id: str, emoji: str):
         # validate the event and the user's permissions
         all_data = await self.validate_event_and_permissions(context, event_id)
         if not all_data:
@@ -297,9 +296,13 @@ class Event(commands.Cog):
 
         # update the message by removing the suggestion
         embed = message.embeds[0]
-        suggestion_text = f"{emoji} <t:{int(dateparser.parse(suggestion[0]).timestamp())}>"
+        suggestion_text = (
+            f"{emoji} <t:{int(dateparser.parse(suggestion[0]).timestamp())}>"
+        )
         updated_description = "\n".join(
-            line for line in embed.description.split("\n") if suggestion_text not in line
+            line
+            for line in embed.description.split("\n")
+            if suggestion_text not in line
         )
         embed.description = updated_description
         await message.edit(embed=embed)
