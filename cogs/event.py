@@ -160,7 +160,7 @@ class Event(commands.Cog):
         event_id = await self.get_event_id(message.id, channel.id)
 
         embed.description += (
-            f"\propose times with `/event suggest {event_id}` or react to vote!\n\n"
+            f"\npropose times with `/event suggest {event_id}` or react to vote!\n\n"
             f"this message will be updated with proposed times as they are added.\n"
             f"**event id:** `{event_id}`"
         )
