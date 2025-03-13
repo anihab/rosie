@@ -2,10 +2,13 @@
 
 A helpful discord bot dedicated to helping user's manage their time. Can set reminders, pomodoro-style timers, reaction roles, and poll to schedule time-zone sensitive events for long distance friends!
 
+To learn more about what Rosie can do, call `/help`!
+
 ## Contents
 
 - [1. Running](#running)
-- [2. Privacy Policy and Terms of Service](#privacy-policy-and-terms-of-service)
+- [2. Commands](#commands)
+- [3. Privacy Policy and Terms of Service](#privacy-policy-and-terms-of-service)
 
 ## Running
 
@@ -41,6 +44,37 @@ The file should follow the template provided below:
     "owner_id": # your user ID
   }
 ```
+
+## Commands
+
+**General**
+- `/help` - Shows this list of commands.  
+- `/support` - Learn how to support the creator!  
+
+**Reminders**
+- `/reminder new` - I'll send you a reminder at the specified time!  
+- `/reminder list` - View all your active reminders.  
+- `/reminder cancel` - Cancel a specific reminder.  
+
+**Reaction Roles**
+- `/rr add` - Set up a reaction role message.  
+- `/rr edit` - Edit a reaction role message.  
+
+**Event Scheduling**
+- `/event plan` - Send a message to plan an event for your server!  
+- `/event suggest` - Suggest a time for an event.  
+- `/event cancel-suggestion` - Remove a suggestion for an event.  
+- `/event tally` - Finalize event time by vote results.  
+- `/event choose` - Choose a suggested event time as the creator.  
+- `/event list` - View a list of all events you are actively planning.  
+
+**Extras**
+- `/hug` - Send a hug!  
+- `/hello` - Say hello! 
+- `/chirp` - Make me send a message.  
+- `/embed` - Make me send an embed.  
+- `/clean` - I'll delete some messages for you.
+
 
 ## Privacy Policy and Terms of Service
 
