@@ -4,6 +4,9 @@ A helpful discord bot dedicated to helping user's manage their time. Can set rem
 
 To learn more about what Rosie can do, call `/help`!
 
+![Preview 1](img/role_ex.png)
+![Preview 2](img/event_ex.png)
+
 ## Contents
 
 - [1. Running](#running)
